@@ -831,3 +831,27 @@ Items raised by the critique and how each was addressed:
 | 26 | Privacy statement | LOW | §6 + popup About text |
 | 27 | USD/i18n | LOW | §6: documented as deliberate scope decision |
 | 28 | `oracle_names` fallback unreliable | LOW | Removed as a fallback; resolution always goes through `scryfall_id_to_oracle` or oracle_id directly |
+
+---
+
+## Appendix: as-built deltas from this plan
+
+The plan above is the rubber-duck-revised design before implementation. A
+few details were resolved differently during implementation. They're listed
+here so future contributors aren't misled by the plan's earlier wording.
+
+| Plan said | As-built reality | Why |
+|---|---|---|
+| Persist parsed indexes in IndexedDB | `chrome.storage.local` keyed by `dollar-commander:last-index`, justified by the requested `unlimitedStorage` permission | Simpler MVP; JSON-serializable round-trip; sufficient for the ~5-8 MB last-good payload. IndexedDB can be revisited if parse cost ever becomes a measurable cold-start issue. |
+| Pareto frontier SQL: `MIN(price_mils) OVER (… ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)` with `price = min_after` | `MIN(price_mils) OVER (… ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)` with `price < min_strictly_later OR min_strictly_later IS NULL` | The earlier shape over-counted duplicate-price rows; the correction was caught in Phase 4 tests and verified across five edge-case scenarios. |
+| Assets referenced via manifest `assets[*].url` | `assets[*].filename` resolved against a fixed `ASSET_BASE = releases/download/data-latest/` | Avoids ever embedding the host repo URL into published JSON; one fewer thing to break on forks. |
+| `force: true` in `getIndex` bypasses both cache and in-flight dedupe | Force bypasses cache freshness only; an existing in-flight fetch is always joined | Caught in Phase 7 critique; the original shape allowed alarm + popup refreshes to fan out into duplicate downloads. |
+| Settings clamp on every save | Clamp only when patch supplies a finite numeric value; blank/non-numeric input retains the previous threshold | Caught in Phase 6 critique; otherwise clearing the input would have set $0.05 silently. |
+| Per-card legality state includes `DEGRADED` for stale data | Staleness is a response-level flag (`dataStale`) on the lookup batch; per-card state continues to use the last-good index | Caught in Phase 6 critique; per-card DEGRADED conflated unrelated concerns. |
+| Quality gate: fail if `unmapped > 500` | Fail at `unmapped / total >= 50%`, warn at `>= 10%` | Caught in Phase 5 critique; a fixed bar would have false-failed every set release day. |
+| `keep-alive.yml` warns when its tracking issue is missing | `keep-alive.yml` auto-creates the tracking issue and label on first run | Caught in Phase 5 critique; silent no-op left the keep-alive feature off in practice. |
+| Daily workflow publishes only on `status=ok` | Publishes on `ok` OR on `skipped` when the DB already contains today's row | Caught in Phase 4 critique; recovers cleanly from a previous partial run that wrote the DB but failed to upload the manifest. |
+| Generated_at uses wall-clock UTC time | Pinned to `as_of_date`T00:00:00Z | Caught in Phase 4 critique; reruns of the same date now produce byte-identical output and matching SHA-256 hashes. |
+
+The phased commit messages reference each critique by phase number with
+the specific finding numbers addressed.

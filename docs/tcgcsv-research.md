@@ -1,5 +1,19 @@
 # Including TCGCSV Data in Dollar Commander — Filtering to One Price Per Card Per Day
 
+> **Status:** historical research. This document captures the investigation
+> that informed the design. The authoritative reference for what was actually
+> built is [`data-format.md`](./data-format.md) (published JSON shape) and
+> [`implementation-plan.md`](./implementation-plan.md) (the rubber-duck-
+> revised plan). Where this doc differs from those, those win.
+>
+> Key points where this doc was overridden by later phases:
+> * Distribution format: published as `manifest.json` + dated `price-index-*.json` / `card-index-*.json` assets verified by SHA-256, not as `legality-index.json.gz`.
+> * Aggregation: both `Normal` and `Foil` subtype rows participate in the per-oracle minimum (the doc equivocated between Normal-primary and any-version; the final rule is any-version).
+> * Lookback window: 365-day lookback + 184-day Jan/Jul rotation grace = 549 days retained, not 365.
+> * Data shape: per-card record is `{today, min_549, first_seen, floor[]}` — the floor is a Pareto frontier supporting arbitrary thresholds, not a boolean.
+> * Asset hosting: `releases/download/data-latest/` tag-specific URL, not `releases/latest/download/...`.
+> * Extension storage: parsed index persists via `chrome.storage.local` (with `unlimitedStorage`), not IndexedDB.
+
 ## Executive Summary
 
 The right price metric is TCGplayer **`marketPrice`** on the **`subTypeName: "Normal"`** row, with `"Foil"` as a fallback when no non-foil exists. This is the same number that Scryfall publishes as `prices.usd`, MTGJSON publishes as `paper.tcgplayer.retail.normal`, and Archidekt publishes as `prices.tcg` — all empirically verified to match to the cent. Moxfield's reverse-engineered API uses the same `usd`/`usd_foil` schema as Scryfall and almost certainly sources the same field[^1][^2][^3][^4].
