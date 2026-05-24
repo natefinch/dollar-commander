@@ -1,0 +1,170 @@
+name: Daily price index
+
+# Runs ~90 min after TCGCSV's daily refresh. Ingests the latest day into
+# history.sqlite, recomputes the per-oracle floor curve, and publishes the
+# extension-consumable assets (price-index, card-index, manifest) to the
+# `data-latest` release.
+#
+# Atomic publication: dated assets first, then the manifest. Clients fetch
+# manifest first and resolve asset URLs from it, so they always see a
+# consistent snapshot.
+
+on:
+  schedule:
+    - cron: "30 21 * * *"      # 21:30 UTC, ~90 min after TCGCSV's ~20:00 refresh
+  workflow_dispatch:
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # `gh release upload`
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/pipeline/requirements.txt
+
+      - name: Install pipeline deps
+        run: pip install -r scripts/pipeline/requirements.txt
+
+      - name: Restore history.sqlite from data-latest
+        # Daily runs require a seeded DB. If the workflow is run on a fresh
+        # repo, dispatch the backfill workflow first.
+        run: |
+          mkdir -p data
+          if ! gh release download data-latest --repo "$GITHUB_REPOSITORY" \
+                  --pattern history.sqlite --dir data; then
+            echo "::error::No history.sqlite found in data-latest release."
+            echo "Run the 'Backfill price history' workflow first."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rebuild Scryfall oracle map (daily)
+        # Rebuilding daily avoids missing newly-released cards. The map file
+        # is ~5-8 MB so this stays fast.
+        run: python -m scripts.pipeline.oracle_map --out data/scryfall-oracle-map.json
+
+      - name: Fetch current Magic products
+        run: |
+          python -m scripts.pipeline.ingest_day \
+            --fetch-products-only \
+            --out data/products.json
+
+      - name: Ingest today
+        id: ingest
+        run: |
+          OUT=$(python -m scripts.pipeline.ingest_day \
+            --date "$(date -u +%Y-%m-%d)" \
+            --db data/history.sqlite \
+            --map data/scryfall-oracle-map.json \
+            --products data/products.json)
+          echo "$OUT"
+          STATUS=$(echo "$OUT" | grep -oE 'INGEST_RESULT=.*' \
+                              | sed 's/^INGEST_RESULT=//' \
+                              | jq -r '.status // "missing_status_line"')
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "Ingestion status: $STATUS"
+
+      - name: Decide whether to publish
+        # Publish on `ok` (fresh data this run), or on `skipped` if the DB
+        # already has today's data (recovery from a prior partial run that
+        # uploaded the DB but failed to upload the manifest).
+        id: decide
+        run: |
+          STATUS="${{ steps.ingest.outputs.status }}"
+          if [[ "$STATUS" == "ok" ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$STATUS" == "skipped" ]]; then
+            TODAY="$(date -u +%Y-%m-%d)"
+            LATEST_DB_DATE=$(python -c "
+          import datetime as dt, sqlite3, sys
+          conn = sqlite3.connect('data/history.sqlite')
+          row = conn.execute('SELECT MAX(date_epoch) FROM price_history').fetchone()
+          if row is None or row[0] is None:
+              sys.exit('empty')
+          print((dt.date(2020,1,1) + dt.timedelta(days=row[0])).isoformat())
+          ")
+            if [[ "$LATEST_DB_DATE" == "$TODAY" ]]; then
+              echo "::notice::Ingestion skipped but DB already contains $TODAY; republishing."
+              echo "publish=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "publish=false" >> "$GITHUB_OUTPUT"
+
+      - name: Build publishable assets
+        if: steps.decide.outputs.publish == 'true'
+        run: |
+          python -m scripts.pipeline.publish \
+            --db data/history.sqlite \
+            --map data/scryfall-oracle-map.json \
+            --out-dir dist/
+
+      - name: Upload dated assets, then atomic manifest
+        if: steps.decide.outputs.publish == 'true'
+        run: |
+          gh release upload data-latest \
+            data/history.sqlite \
+            dist/price-index-*.json \
+            dist/card-index-*.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          gh release upload data-latest dist/manifest.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Clean up old dated assets (keep last 30 days)
+        if: steps.decide.outputs.publish == 'true'
+        run: |
+          # Only the latest 30 days of dated assets need to remain on the
+          # release. The current manifest only references today's pair, so
+          # older dated files would otherwise grow without bound.
+          KEEP=30
+          for prefix in price-index card-index; do
+            ASSETS=$(gh release view data-latest \
+                      --repo "$GITHUB_REPOSITORY" \
+                      --json assets \
+                      --jq ".assets[].name | select(startswith(\"$prefix-\"))" \
+                      | sort -r)
+            i=0
+            while IFS= read -r asset; do
+              i=$((i + 1))
+              if (( i > KEEP )); then
+                echo "Removing old asset: $asset"
+                gh release delete-asset data-latest "$asset" \
+                  --repo "$GITHUB_REPOSITORY" --yes || true
+              fi
+            done <<< "$ASSETS"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summarize run
+        if: always()
+        run: |
+          echo "## Daily index run summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "* Ingest status: \`${{ steps.ingest.outputs.status || 'unknown' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "* Published: \`${{ steps.decide.outputs.publish || 'false' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f dist/manifest.json ]]; then
+            DATA_VERSION=$(jq -r '.data_version' dist/manifest.json)
+            CARD_COUNT=$(jq -r '.card_count' dist/manifest.json)
+            echo "* Published data_version: \`$DATA_VERSION\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "* Card count: $CARD_COUNT" >> "$GITHUB_STEP_SUMMARY"
+          fi
