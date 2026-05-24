@@ -473,7 +473,11 @@ def ingest_one_day(
     session: requests.Session | None = None,
     work_dir: Path | None = None,
 ) -> dict:
-    """Ingest a single date's data. Returns a status dict suitable for JSON-encoding."""
+    """Ingest a single date's data. Returns a status dict suitable for JSON-encoding.
+
+    The downloaded archive is always deleted after extraction (or on any error
+    in between) so that long backfills do not exhaust the runner's disk.
+    """
     session = session or _make_session()
 
     try:
@@ -507,14 +511,24 @@ def ingest_one_day(
     tcg_map, etched_map = load_oracle_map(map_path)
 
     work_dir = work_dir or Path(tempfile.mkdtemp(prefix="dc-ingest-"))
+    work_dir.mkdir(parents=True, exist_ok=True)
     archive_path = work_dir / f"prices-{date_str}.ppmd.7z"
 
     try:
-        fetch_archive(session, date_str, archive_path)
-    except ArchiveMissingError:
-        return {"date": date_str, "status": "missing"}
+        try:
+            fetch_archive(session, date_str, archive_path)
+        except ArchiveMissingError:
+            return {"date": date_str, "status": "missing"}
 
-    price_rows = extract_magic_prices(archive_path, date_str)
+        price_rows = extract_magic_prices(archive_path, date_str)
+    finally:
+        # Always reclaim disk: 549 days of ~25 MB archives would otherwise
+        # exhaust the GitHub Actions runner during a backfill.
+        try:
+            archive_path.unlink(missing_ok=True)
+        except OSError as exc:
+            LOG.warning("Could not delete archive %s: %s", archive_path, exc)
+
     if not price_rows:
         return {"date": date_str, "status": "empty", "reason": "no price rows in archive"}
 

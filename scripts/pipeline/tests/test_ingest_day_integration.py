@@ -97,6 +97,7 @@ def test_full_path_ingest_one_day_ok(
 ):
     session, ctx = fake_session
     db_path = tmp_path / "history.sqlite"
+    work_dir = tmp_path / "work"
 
     result = ingest_day.ingest_one_day(
         date_str=ctx["date_str"],
@@ -104,13 +105,19 @@ def test_full_path_ingest_one_day_ok(
         map_path=oracle_map_file,
         products_path=products_file,
         session=session,
-        work_dir=tmp_path / "work",
+        work_dir=work_dir,
     )
 
     assert result["status"] == "ok"
     assert result["rows_written"] == 2  # Disenchant + Emrakul; serialized + null skipped
     assert result["stats"]["serialized"] == 1
     assert result["stats"]["kept"] == 4
+
+    # The downloaded archive must be cleaned up so a 549-day backfill cannot
+    # exhaust the runner disk.
+    assert not (work_dir / f"prices-{ctx['date_str']}.ppmd.7z").exists()
+    # But the work directory itself is still around (the caller owns it).
+    assert work_dir.is_dir()
 
     # DB state.
     import sqlite3

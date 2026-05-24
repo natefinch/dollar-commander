@@ -1,0 +1,94 @@
+name: Backfill price history
+
+# Seeds `data/history.sqlite` for the rolling 549-day window and uploads it to
+# the `data-latest` release. This workflow does NOT produce the consumable
+# `price-index.json` / `card-index.json` / `manifest.json` artifacts — that is
+# the daily workflow's job (Phase 4). After a successful backfill, run the
+# daily workflow at least once to publish the extension-consumable assets.
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date YYYY-MM-DD (default: today-549)"
+        required: false
+      end_date:
+        description: "End date YYYY-MM-DD (default: today)"
+        required: false
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # needed for `gh release upload`
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      START_DATE: ${{ inputs.start_date }}
+      END_DATE: ${{ inputs.end_date }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/pipeline/requirements.txt
+
+      - name: Install pipeline deps
+        run: pip install -r scripts/pipeline/requirements.txt
+
+      - name: Resume existing history.sqlite if present
+        # Idempotent INSERT OR REPLACE means picking up a partial DB is safe;
+        # a resumed backfill skips the days we've already ingested.
+        run: |
+          mkdir -p data
+          gh release download data-latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern history.sqlite \
+            --dir data || echo "No existing history.sqlite — starting from scratch."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build fresh oracle map
+        run: python -m scripts.pipeline.oracle_map --out data/scryfall-oracle-map.json
+
+      - name: Fetch current Magic products
+        run: |
+          python -m scripts.pipeline.ingest_day \
+            --fetch-products-only \
+            --out data/products.json
+
+      - name: Run backfill
+        # Inputs are passed via env vars to avoid shell injection from the
+        # workflow_dispatch form. The script validates them as ISO dates.
+        run: |
+          args=()
+          if [[ -n "$START_DATE" ]]; then args+=(--start "$START_DATE"); fi
+          if [[ -n "$END_DATE"   ]]; then args+=(--end   "$END_DATE");   fi
+          python -m scripts.pipeline.backfill "${args[@]}" \
+            --db data/history.sqlite \
+            --map data/scryfall-oracle-map.json \
+            --products data/products.json
+
+      - name: Ensure data-latest release exists
+        run: |
+          gh release view data-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create data-latest \
+                --repo "$GITHUB_REPOSITORY" \
+                --title "Dollar Commander data (latest)" \
+                --notes "Rolling latest data for the Dollar Commander extension."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload history.sqlite to data-latest
+        run: |
+          gh release upload data-latest data/history.sqlite \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
