@@ -6,7 +6,7 @@
   <style>
     * { box-sizing: border-box; }
     body {
-      width: 320px;
+      width: 360px;
       margin: 0;
       padding: 14px;
       color: #172033;
@@ -14,27 +14,173 @@
       background: #f8fafc;
     }
     h1 {
-      margin: 0 0 10px;
+      margin: 0 0 4px;
       font-size: 16px;
+    }
+    .subtitle {
+      color: #64748b;
+      font-size: 11px;
+      margin-bottom: 12px;
     }
     .panel {
       border: 1px solid #dbe3ef;
       border-radius: 8px;
-      padding: 10px;
+      padding: 12px;
       background: #fff;
+      margin-bottom: 10px;
     }
-    .muted {
+    label {
+      display: block;
+      font-size: 12px;
+      color: #475569;
+      margin-bottom: 4px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .currency {
+      color: #94a3b8;
+      font-size: 14px;
+    }
+    input[type="number"] {
+      flex: 1;
+      padding: 6px 8px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 14px;
+      font-variant-numeric: tabular-nums;
+    }
+    button {
+      padding: 6px 10px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #fff;
+      cursor: pointer;
+      font-size: 12px;
+      color: #172033;
+    }
+    button:hover { background: #f1f5f9; }
+    button.primary {
+      background: #14532d;
+      color: #fff;
+      border-color: #14532d;
+    }
+    button.primary:hover { background: #166534; }
+    .meta {
+      font-size: 11px;
       color: #64748b;
     }
-    .site {
-      margin-top: 6px;
+    .meta strong {
+      color: #172033;
       font-weight: 600;
     }
+    .stale {
+      background: #fef3c7;
+      border-color: #fcd34d;
+      color: #78350f;
+      padding: 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+    details {
+      margin-top: 6px;
+      font-size: 12px;
+    }
+    details summary {
+      cursor: pointer;
+      color: #475569;
+      padding: 4px 0;
+    }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 6px 0;
+    }
+    .toggle-row label { margin: 0; }
+    .footer {
+      font-size: 11px;
+      color: #64748b;
+      margin-top: 12px;
+      line-height: 1.5;
+    }
+    .footer a {
+      color: #14532d;
+      text-decoration: none;
+    }
+    .footer a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
   <h1>Dollar Commander</h1>
-  <div id="content" class="panel muted">Checking current tab...</div>
+  <div class="subtitle">A card is legal if any printing was at or below your
+    threshold in the last 365 days.</div>
+
+  <div id="stale-banner" class="stale" hidden></div>
+
+  <div class="panel">
+    <label for="threshold-input">Price threshold (USD)</label>
+    <div class="row">
+      <span class="currency">$</span>
+      <input id="threshold-input" type="number" step="0.05" min="0.05" max="25"
+             inputmode="decimal" />
+      <button id="threshold-reset" type="button" title="Reset to $1.00">Reset</button>
+    </div>
+    <div class="meta" id="threshold-help">Between $0.05 and $25.00.</div>
+  </div>
+
+  <div class="panel">
+    <div class="meta">
+      Data as of <strong id="status-asof">—</strong>
+      (<span id="status-age">—</span>).
+    </div>
+    <div class="meta" style="margin-top:4px">
+      Cards in index: <strong id="status-cards">—</strong>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="refresh-btn" class="primary" type="button">Refresh now</button>
+      <span id="refresh-status" class="meta"></span>
+    </div>
+  </div>
+
+  <details>
+    <summary>Advanced</summary>
+    <div class="panel">
+      <div class="meta">
+        Lookback window: <strong id="adv-lookback">365 days</strong><br>
+        Rotation grace: <strong id="adv-grace">184 days</strong> (Jan 1 / Jul 1 cutoffs)
+      </div>
+      <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 8px 0;">
+      <div class="toggle-row">
+        <label for="site-scryfall">Enabled on Scryfall</label>
+        <input id="site-scryfall" type="checkbox" />
+      </div>
+      <div class="toggle-row" title="Coming in a follow-up phase">
+        <label for="site-moxfield" style="color:#94a3b8">Enabled on Moxfield</label>
+        <input id="site-moxfield" type="checkbox" disabled />
+      </div>
+      <div class="toggle-row" title="Coming in a follow-up phase">
+        <label for="site-archidekt" style="color:#94a3b8">Enabled on Archidekt</label>
+        <input id="site-archidekt" type="checkbox" disabled />
+      </div>
+    </div>
+  </details>
+
+  <div class="footer">
+    Data: TCGCSV + Scryfall (paper TCGplayer market price, aggregated across
+    all printings). This extension only fetches a public data file from
+    GitHub. No browsing or deck data is transmitted.<br>
+    <a id="link-repo" href="https://github.com/natefinch/dollar-commander" target="_blank">Source</a>
+    ·
+    <a id="link-tcgcsv" href="https://tcgcsv.com" target="_blank">TCGCSV</a>
+    ·
+    <a id="link-scryfall" href="https://scryfall.com" target="_blank">Scryfall</a>
+  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>

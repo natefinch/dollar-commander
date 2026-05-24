@@ -44,7 +44,12 @@ export async function getIndex({ force = false } = {}) {
   if (cached && !force && Date.now() - cached.parsedAt < STALE_AFTER_MS) {
     return cached;
   }
-  if (inFlight && !force) return inFlight;
+  // Always join an in-flight fetch — even forced refreshes — so concurrent
+  // alarm + popup refresh calls don't fan out into duplicate downloads or
+  // race on persistence. The behavioural difference is whether we *start*
+  // a new fetch when no in-flight exists; force=true ignores the cache
+  // freshness but doesn't bypass the dedupe.
+  if (inFlight) return inFlight;
 
   inFlight = (async () => {
     try {
