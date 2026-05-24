@@ -71,11 +71,48 @@ jobs:
             --map data/scryfall-oracle-map.json \
             --products data/products.json)
           echo "$OUT"
-          STATUS=$(echo "$OUT" | grep -oE 'INGEST_RESULT=.*' \
-                              | sed 's/^INGEST_RESULT=//' \
-                              | jq -r '.status // "missing_status_line"')
+          PAYLOAD=$(echo "$OUT" | grep -oE 'INGEST_RESULT=.*' | sed 's/^INGEST_RESULT=//')
+          STATUS=$(echo "$PAYLOAD" | jq -r '.status // "missing_status_line"')
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
           echo "Ingestion status: $STATUS"
+          # Save the full payload for the downstream quality gate.
+          echo "$PAYLOAD" > /tmp/ingest-result.json
+
+      - name: Quality gate
+        # Ratio-based gating so new-set-release days don't false-fail. A
+        # set release can briefly produce hundreds of unmapped products
+        # before Scryfall's next bulk regenerates; that's NOT a regression.
+        if: steps.ingest.outputs.status == 'ok'
+        id: gate
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          with open("/tmp/ingest-result.json") as fh:
+              payload = json.load(fh)
+          stats = payload.get("stats", {})
+          kept       = int(stats.get("kept", 0))
+          unmapped   = int(stats.get("unmapped", 0))
+          serialized = int(stats.get("serialized", 0))
+          processed = kept + unmapped + serialized
+          ratio = unmapped / processed if processed else 0.0
+          print(f"kept={kept} unmapped={unmapped} serialized={serialized} ratio={ratio:.4f}")
+
+          # Strict bound: payload must have stats. Missing stats on an `ok`
+          # response means producer regression.
+          if not stats:
+              print("::error::INGEST_RESULT payload has no `stats`; producer regression?")
+              sys.exit(1)
+          # Warn at 10%, fail only at 50% — the latter being clearly catastrophic.
+          if ratio >= 0.50:
+              print(f"::error::Unmapped ratio {ratio:.1%} >= 50% — refusing to publish a degraded index.")
+              sys.exit(1)
+          if ratio >= 0.10:
+              print(f"::warning::Unmapped ratio {ratio:.1%} >= 10% — investigate Scryfall bulk freshness.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"unmapped_ratio={ratio:.4f}\n")
+              out.write(f"unmapped={unmapped}\n")
+              out.write(f"kept={kept}\n")
+          PY
 
       - name: Decide whether to publish
         # Publish on `ok` (fresh data this run), or on `skipped` if the DB

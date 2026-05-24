@@ -1,0 +1,52 @@
+name: Keep-alive monthly comment
+
+# GitHub disables scheduled workflows after 60 days of repository inactivity.
+# Bot-generated runs are not always counted as activity. This workflow runs
+# monthly and posts a comment on a tracking issue so the scheduled
+# `Daily price index` workflow stays armed.
+#
+# The tracking issue is auto-created on first run if it doesn't already
+# exist (so misconfiguration is visible, not silent).
+
+on:
+  schedule:
+    - cron: "30 12 1 * *"     # 12:30 UTC on the 1st of every month
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ensure keep-alive issue exists and post status comment
+        run: |
+          ISSUE=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+                                --label keep-alive \
+                                --state open \
+                                --json number \
+                                --jq '.[0].number')
+          if [[ -z "$ISSUE" ]]; then
+            echo "Creating keep-alive tracking issue..."
+            # `gh label create` is idempotent only if you check first.
+            gh label list --repo "$GITHUB_REPOSITORY" \
+                          --json name --jq '.[].name' | grep -qx keep-alive \
+              || gh label create keep-alive \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --description "Pipeline keep-alive tracker" \
+                  --color B0BEC5
+            ISSUE=$(gh issue create \
+                      --repo "$GITHUB_REPOSITORY" \
+                      --title "Pipeline keep-alive tracker" \
+                      --label keep-alive \
+                      --body "This issue exists to keep the repository active so the daily price-index scheduled workflow doesn't auto-disable after 60 days of inactivity. The keep-alive workflow comments here once per month." \
+                      | grep -oE '[0-9]+$')
+          fi
+          DATE=$(date -u +%Y-%m-%d)
+          gh issue comment "$ISSUE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --body "Automated keep-alive ping on $DATE. The daily price-index workflow is still active."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,64 @@
+name: Notify on daily index failure
+
+# When the `Daily price index` workflow fails, open or update a single pinned
+# issue with the failure context so the operator notices without having to
+# poll the Actions tab. Reuses one issue (looked up by `pipeline-failure`
+# label) to avoid spamming.
+
+on:
+  workflow_run:
+    workflows: ["Daily price index"]
+    types: [completed]
+
+permissions:
+  issues: write
+  actions: read
+
+jobs:
+  notify:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Open or update pipeline-failure issue
+        run: |
+          RUN_URL="${{ github.event.workflow_run.html_url }}"
+          RUN_ID="${{ github.event.workflow_run.id }}"
+          DATE=$(date -u +%Y-%m-%d)
+          BODY="Daily price index run **failed** on $DATE.
+
+          - Run: $RUN_URL
+          - Run id: $RUN_ID
+          - Head SHA: ${{ github.event.workflow_run.head_sha }}
+
+          Open the run log to see which step failed. Common causes:
+          - Quality gate (unmapped ratio ≥ 50%) — Scryfall bulk regression.
+          - TCGCSV outage — should self-recover next day.
+          - GitHub Releases upload throttling — rerun the workflow."
+
+          # Ensure label exists.
+          gh label list --repo "$GITHUB_REPOSITORY" \
+                        --json name --jq '.[].name' | grep -qx pipeline-failure \
+            || gh label create pipeline-failure \
+                --repo "$GITHUB_REPOSITORY" \
+                --description "Daily pipeline failures" \
+                --color D93F0B
+
+          ISSUE=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+                                --label pipeline-failure \
+                                --state open \
+                                --json number \
+                                --jq '.[0].number')
+          if [[ -z "$ISSUE" ]]; then
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Daily price index failures" \
+              --label pipeline-failure \
+              --body "$BODY"
+          else
+            gh issue comment "$ISSUE" \
+              --repo "$GITHUB_REPOSITORY" \
+              --body "$BODY"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
