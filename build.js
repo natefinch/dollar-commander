@@ -9,7 +9,11 @@ const BROWSERS = ['chrome', 'firefox'];
 const ROOT = import.meta.dirname;
 
 // Entry points bundled by esbuild (IIFE, no module runtime needed).
-const BUNDLE_ENTRIES = ['background.js', 'content.js', 'content-main.js', 'popup.js'];
+const BUNDLE_ENTRIES = [
+  'background.js',
+  'content/scryfall.js',
+  'popup.js',
+];
 
 // Files copied as-is (no bundling).
 const COPY_FILES = ['popup.html', 'styles.css'];

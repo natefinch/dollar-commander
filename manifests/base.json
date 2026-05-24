@@ -27,29 +27,9 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://moxfield.com/*",
-        "https://archidekt.com/*",
-        "https://scryfall.com/*"
-      ],
-      "js": [
-        "content.js"
-      ],
-      "css": [
-        "styles.css"
-      ],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": [
-        "https://moxfield.com/*",
-        "https://archidekt.com/*",
-        "https://scryfall.com/*"
-      ],
-      "js": [
-        "content-main.js"
-      ],
-      "world": "MAIN",
+      "matches": ["https://scryfall.com/*"],
+      "js": ["content/scryfall.js"],
+      "css": ["styles.css"],
       "run_at": "document_idle"
     }
   ],
