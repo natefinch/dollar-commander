@@ -20,7 +20,7 @@ const MANIFEST_URL =
   `https://github.com/${REPO}/releases/download/${RELEASE_TAG}/manifest.json`;
 const ASSET_BASE = `https://github.com/${REPO}/releases/download/${RELEASE_TAG}/`;
 
-const MAX_ASSET_BYTES = 10 * 1024 * 1024;     // reject above this (sanity guard)
+const MAX_ASSET_BYTES = 32 * 1024 * 1024;     // reject above this (sanity guard)
 const STALE_AFTER_MS = 6 * 60 * 60 * 1000;     // re-check manifest every 6h
 const STORAGE_KEY = "dollar-commander:last-index";
 
