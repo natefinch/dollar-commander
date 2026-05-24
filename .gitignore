@@ -6,3 +6,9 @@ dist/
 .playwright-mcp/
 web-ext-artifacts/
 
+# pipeline working data
+data/
+__pycache__/
+.venv/
+.pytest_cache/
+
