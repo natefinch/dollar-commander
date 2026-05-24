@@ -23,8 +23,11 @@ const STATE_STYLES = Object.freeze({
  *              once; subsequent calls update the existing badge in place.
  * @param evaluation  output of legality.evaluate(): { state, record?, lastUnder?, daysUntilRotation?, nextRotation? }.
  * @param ctx
- *   ctx.thresholdUsd  the threshold used for evaluation (for tooltip).
- *   ctx.stale (bool)  whether the data feed is stale (banner-style hint).
+ *   ctx.thresholdUsd     the threshold used for evaluation (for tooltip).
+ *   ctx.stale (bool)     whether the data feed is stale (banner-style hint).
+ *   ctx.placement        "inline" (default) flows next to text; "absolute"
+ *                        floats the badge into the host's top-right corner.
+ *                        Use "absolute" for image-tile hosts (card grids).
  */
 export function mountBadge(host, evaluation, ctx = {}) {
   if (!host || !evaluation) return null;
@@ -37,12 +40,13 @@ export function mountBadge(host, evaluation, ctx = {}) {
   }
 
   const style = STATE_STYLES[evaluation.state] ?? STATE_STYLES.unknown;
-  Object.assign(badge.style, {
+  const placement = ctx.placement === "absolute" ? "absolute" : "inline";
+
+  const baseStyles = {
     display: "inline-flex",
     alignItems: "center",
     gap: "4px",
     padding: "2px 8px",
-    marginLeft: "6px",
     borderRadius: "999px",
     border: `1px solid ${style.outline}`,
     background: style.bg,
@@ -50,8 +54,42 @@ export function mountBadge(host, evaluation, ctx = {}) {
     font: "600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     lineHeight: "1.3",
     cursor: "default",
-    verticalAlign: "middle",
-  });
+  };
+
+  if (placement === "absolute") {
+    // Only promote host to positioned context if it is currently static —
+    // we must not clobber Scryfall's own positioned layouts.
+    try {
+      const view = host.ownerDocument?.defaultView ?? globalThis;
+      const computed = view?.getComputedStyle?.(host);
+      if (computed && computed.position === "static") {
+        host.style.position = "relative";
+      }
+    } catch { /* getComputedStyle unavailable in tests; ignore */ }
+
+    Object.assign(badge.style, baseStyles, {
+      position: "absolute",
+      top: "6px",
+      right: "6px",
+      // Modest z-index — wins over the card image inside the tile, but
+      // stays below page-wide Scryfall modals / image-zoom popovers.
+      zIndex: "10",
+      // Keep pointer-events: auto so the browser surfaces the native
+      // `title` tooltip on hover. The small badge in the corner blocks
+      // ~50px of click area on the card image link; the user can still
+      // click the rest of the tile to navigate to the card detail page.
+      pointerEvents: "auto",
+      boxShadow: "0 1px 2px rgba(0,0,0,0.15)",
+    });
+  } else {
+    Object.assign(badge.style, baseStyles, {
+      position: "static",
+      marginLeft: "6px",
+      verticalAlign: "middle",
+      zIndex: "auto",
+      pointerEvents: "auto",
+    });
+  }
 
   // textContent only — never assign innerHTML with data-driven strings.
   badge.textContent = style.label + (ctx.stale ? " (stale)" : "");

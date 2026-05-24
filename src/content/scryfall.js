@@ -2,13 +2,24 @@
 // mounts Dollar Commander badges next to card titles.
 //
 // Lives in the extension's ISOLATED world. Scryfall conveniently exposes
-// stable identifiers in the DOM:
+// stable identifiers in the DOM across four page modes:
 //
-//   * Card detail pages (`/card/{set}/{cn}/{slug}`) carry
-//     `<meta name="scryfall:oracle:id" content="...">` and
-//     `<meta name="scryfall:card:id" content="...">` in <head>.
-//   * Search grid results render `.card-grid-item[data-card-id="UUID"]`
-//     containers whose anchors link to /card/{set}/{cn}/{slug}.
+//   * Card detail pages (`/card/{set}/{cn}/{slug}`) ship
+//     `<meta name="scryfall:oracle:id">` + `<meta name="scryfall:card:id">`
+//     in <head>, with the title rendered as `<span class="card-text-card-name">`.
+//   * Full search view (`/search?as=full`) stacks multiple `.card-profile`
+//     blocks — each holds a `button.deckbuilder-card-add-button[data-card-id]`
+//     plus its own `.card-text-card-name`.
+//   * Grid search view (`/search?as=grid`, the default) renders
+//     `.card-grid-item[data-card-id]` wrappers around card images.
+//   * Checklist search view (`/search?as=checklist`) renders
+//     `table.checklist > tbody > tr[data-card-id]` rows; the name lives
+//     in a `<td class="ellipsis"><a>...</a></td>` cell.
+//
+// We must NOT blindly select every `[data-card-id]` on the page — Scryfall
+// scatters that attribute across visually-hidden buttons, language-flag
+// anchors, print-history links, and card-tooltip popovers, and appending a
+// badge into any of those is either invisible or wrecks the layout.
 
 import { mountBadge, removeBadgesIn } from "./common/overlay.js";
 import { settingsKey } from "../lib/settings.js";
@@ -54,7 +65,14 @@ function observeMutations() {
       }
       if (interesting) break;
     }
-    if (interesting) scheduleScan();
+    if (interesting) {
+      // The page DOM changed under us — if Scryfall replaced the same card
+      // tiles (e.g., Vue rerender of a search grid that happens to contain
+      // the same set of UUIDs), the new host elements have no badges yet
+      // even though our batch key is unchanged. Force a re-mount.
+      lastBatchKey = "";
+      scheduleScan();
+    }
   });
   observer.observe(document.body, { childList: true, subtree: true });
 }
@@ -125,6 +143,7 @@ async function scanAndBadge() {
     mountBadge(host, evaluation, {
       thresholdUsd: response.settings?.thresholdUsd,
       stale,
+      placement: c.placement ?? "inline",
     });
   }
 }
@@ -134,7 +153,10 @@ async function scanAndBadge() {
 // ---------------------------------------------------------------------------
 
 /**
- * Walk the DOM and return a Map of `host element` -> `{oracleId?, scryfallId?}`.
+ * Walk the DOM and return a Map of `host element` -> candidate descriptor.
+ * Each descriptor may carry `oracleId`, `scryfallId`, and a `placement` hint
+ * (`"inline"` for badges that flow next to text, `"absolute"` for corner
+ * overlays on card-image tiles).
  *
  * Exported for tests so a synthetic DOM can exercise the extraction
  * heuristics without going through the full background-SW round-trip.
@@ -142,44 +164,77 @@ async function scanAndBadge() {
 export function collectCardCandidates(doc) {
   const out = new Map();
 
-  // Strategy 1: card-detail page — read the meta tags Scryfall ships in
-  // <head>. We append the badge to the card-name element if present; else
-  // to <h1> as a fallback.
+  // -------------------------------------------------------------------------
+  // Strategy A — single-card detail page (`/card/...`). The <head> meta
+  // tags carry the canonical oracle_id, so we can skip the scryfall_id
+  // round-trip entirely.
+  // -------------------------------------------------------------------------
   const oracleMeta = doc.querySelector("meta[name='scryfall:oracle:id']");
   const cardMeta   = doc.querySelector("meta[name='scryfall:card:id']");
-  const oracleId   = oracleMeta?.getAttribute?.("content");
-  const cardId     = cardMeta?.getAttribute?.("content");
-  if (oracleId && UUID_RE.test(oracleId)) {
+  const metaOracleId = oracleMeta?.getAttribute?.("content") ?? null;
+  const metaCardId   = cardMeta?.getAttribute?.("content") ?? null;
+  if (metaOracleId && UUID_RE.test(metaOracleId)) {
     const host = doc.querySelector(".card-text-card-name")
               ?? doc.querySelector("h1");
     if (host) {
       out.set(host, {
-        oracleId,
-        scryfallId: cardId && UUID_RE.test(cardId) ? cardId : undefined,
+        oracleId: metaOracleId,
+        scryfallId: metaCardId && UUID_RE.test(metaCardId) ? metaCardId : undefined,
+        placement: "inline",
       });
       host.setAttribute(ROOT_ATTR, "1");
     }
   }
 
-  // Strategy 2: search-grid items. Scryfall renders `.card-grid-item`
-  // wrappers with `data-card-id="UUID"`; the anchor inside is the natural
-  // place to hang a small badge.
-  for (const item of doc.querySelectorAll("[data-card-id]")) {
-    const sid = item.getAttribute("data-card-id");
+  // -------------------------------------------------------------------------
+  // Strategy B — full search view (`?as=full`) renders multiple
+  // `.card-profile` blocks. Within each profile, the visually-hidden
+  // deckbuilder-add button carries the printing's scryfall_id, and the
+  // visible `.card-text-card-name` is our badge host.
+  // -------------------------------------------------------------------------
+  for (const profile of doc.querySelectorAll(".card-profile")) {
+    const btn = profile.querySelector(".deckbuilder-card-add-button[data-card-id]");
+    const sid = btn?.getAttribute?.("data-card-id");
     if (!sid || !UUID_RE.test(sid)) continue;
-    const host = item.querySelector("a") ?? item;
-    if (out.has(host)) continue;
-    out.set(host, { scryfallId: sid });
+    const host = profile.querySelector(".card-text-card-name");
+    if (!host || out.has(host)) continue;
+    out.set(host, { scryfallId: sid, placement: "inline" });
     host.setAttribute(ROOT_ATTR, "1");
   }
 
-  // Strategy 3: anchors with a scoped attribute we can also recognize.
-  for (const a of doc.querySelectorAll("a[data-scryfall-id], a[data-card-id]")) {
-    const sid = a.getAttribute("data-scryfall-id") ?? a.getAttribute("data-card-id");
+  // -------------------------------------------------------------------------
+  // Strategy C — grid search view (`?as=grid`, the default).
+  // `.card-grid-item[data-card-id]` is the wrapper around each card image.
+  // We mount on the wrapper (NOT the inner image-link `<a>`) because
+  // appending a child inside the image-link gets clipped by Scryfall's
+  // layout. The badge floats absolutely in the top-right corner of the
+  // card tile.
+  // -------------------------------------------------------------------------
+  for (const item of doc.querySelectorAll(".card-grid-item[data-card-id]")) {
+    const sid = item.getAttribute("data-card-id");
     if (!sid || !UUID_RE.test(sid)) continue;
-    if (out.has(a)) continue;
-    out.set(a, { scryfallId: sid });
-    a.setAttribute(ROOT_ATTR, "1");
+    if (out.has(item)) continue;
+    out.set(item, { scryfallId: sid, placement: "absolute" });
+    item.setAttribute(ROOT_ATTR, "1");
+  }
+
+  // -------------------------------------------------------------------------
+  // Strategy D — checklist search view (`?as=checklist`). Rows under
+  // `table.checklist` carry `data-card-id`. Mount in the USD-price `<td>`
+  // (the cell containing `a.currency-usd`) — that cell is non-`.ellipsis`,
+  // so the badge isn't clipped, and it's the column the user is already
+  // scanning for affordability info. Falls back to a sane row anchor.
+  // -------------------------------------------------------------------------
+  for (const row of doc.querySelectorAll("table.checklist tr[data-card-id]")) {
+    const sid = row.getAttribute("data-card-id");
+    if (!sid || !UUID_RE.test(sid)) continue;
+    const usdLink = row.querySelector("a.currency-usd");
+    const host = usdLink?.parentElement
+              ?? row.querySelector(".ellipsis a")
+              ?? row.querySelector("a");
+    if (!host || out.has(host)) continue;
+    out.set(host, { scryfallId: sid, placement: "inline" });
+    host.setAttribute(ROOT_ATTR, "1");
   }
 
   return out;
