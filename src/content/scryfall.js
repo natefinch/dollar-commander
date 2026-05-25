@@ -187,30 +187,22 @@ export function collectCardCandidates(doc) {
   // tags carry the canonical oracle_id, so we can skip the scryfall_id
   // round-trip entirely.
   //
-  // Preferred render target on detail pages is Scryfall's native
-  // `dl.card-legality` table — we inject a new "Dollar" row right under
-  // "Penny" so it blends with the existing format-legality list. If the
-  // table or the Penny anchor is missing (older cards, schemes, vanguard,
-  // or a future localized layout), fall back to a pill badge next to the
-  // card title so the user always sees *something*.
+  // We render exclusively inside Scryfall's native `dl.card-legality`
+  // table, injecting a new "$ Commander" row right under "Penny" so it
+  // blends with the existing format-legality list. If the table or the
+  // Penny anchor is missing (schemes, vanguard, tokens, or a future
+  // localized layout) we render nothing on this page rather than slap a
+  // pill next to the card title — explicit user preference.
   // -------------------------------------------------------------------------
   if (metaOracleId && UUID_RE.test(metaOracleId)) {
     const dl = doc.querySelector("dl.card-legality");
-    const hasPenny = dl ? hasPennyAnchor(dl) : false;
-    const candidateInfo = {
-      oracleId: metaOracleId,
-      scryfallId: metaCardId && UUID_RE.test(metaCardId) ? metaCardId : undefined,
-    };
-    if (dl && hasPenny) {
-      out.set(dl, { ...candidateInfo, placement: "legality-row" });
+    if (dl && hasPennyAnchor(dl)) {
+      out.set(dl, {
+        oracleId: metaOracleId,
+        scryfallId: metaCardId && UUID_RE.test(metaCardId) ? metaCardId : undefined,
+        placement: "legality-row",
+      });
       dl.setAttribute(ROOT_ATTR, "1");
-    } else {
-      const host = doc.querySelector(".card-text-card-name")
-                ?? doc.querySelector("h1");
-      if (host) {
-        out.set(host, { ...candidateInfo, placement: "inline" });
-        host.setAttribute(ROOT_ATTR, "1");
-      }
     }
   }
 

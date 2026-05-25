@@ -228,9 +228,9 @@ test("renderLegalityRow injects a Dollar row right after the Penny row", () => {
     const ourRow = dl.children[pennyIdx + 1];
     assert.ok(ourRow.className.includes("dollar-commander-legality-row"));
     assert.equal(ourRow.getAttribute("data-dc-format-row"), "1");
-    // The dollar row's dt is "Dollar".
+    // The $ Commander row's dt label.
     const dt = ourRow.children[0].children[0];
-    assert.equal(dt.textContent, "Dollar");
+    assert.equal(dt.textContent, "$ Commander");
   });
 });
 

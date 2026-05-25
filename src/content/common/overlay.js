@@ -154,7 +154,7 @@ export function renderLegalityRow(dl, evaluation, ctx = {}) {
     const item = doc.createElement("div");
     item.className = "card-legality-item";
     const dt = doc.createElement("dt");
-    dt.textContent = "Dollar";
+    dt.textContent = "$ Commander";
     dd = doc.createElement("dd");
     item.appendChild(dt);
     item.appendChild(dd);

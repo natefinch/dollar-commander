@@ -130,25 +130,38 @@ const OID = "a7e97fa9-4b72-4548-b854-5be5f18a6f1a";
 const SID = "658c5caa-d739-4d30-a512-43ac4de900cb";
 const SID2 = "9976eb70-0d39-4882-8041-a4d29527c292";
 
-test("detail page: extracts oracle_id + card_id from meta tags", () => {
-  const cardName = makeEl({
-    tag: "span", attrs: { class: "card-text-card-name" },
+test("detail page: extracts oracle_id + card_id from meta tags into a legality-row candidate", () => {
+  const pennyDt = makeEl({ tag: "dt" });
+  pennyDt.textContent = "Penny";
+  const dl = makeEl({
+    tag: "dl", attrs: { class: "card-legality" },
+    children: [
+      makeEl({
+        tag: "div", attrs: { class: "card-legality-row" },
+        children: [
+          makeEl({
+            tag: "div", attrs: { class: "card-legality-item" },
+            children: [pennyDt],
+          }),
+        ],
+      }),
+    ],
   });
   const doc = makeEl({
     children: [
       makeEl({ tag: "meta", attrs: { name: "scryfall:oracle:id", content: OID } }),
       makeEl({ tag: "meta", attrs: { name: "scryfall:card:id", content: SID } }),
-      cardName,
+      dl,
     ],
   });
 
   const candidates = collectCardCandidates(doc);
   assert.equal(candidates.size, 1);
   const [[host, info]] = [...candidates.entries()];
-  assert.equal(host, cardName);
+  assert.equal(host, dl);
   assert.equal(info.oracleId, OID);
   assert.equal(info.scryfallId, SID);
-  assert.equal(info.placement, "inline");
+  assert.equal(info.placement, "legality-row");
 });
 
 test("detail page: prefers dl.card-legality + Penny row over pill badge", () => {
@@ -187,7 +200,7 @@ test("detail page: prefers dl.card-legality + Penny row over pill badge", () => 
   assert.equal(info.placement, "legality-row");
 });
 
-test("detail page falls back to pill when dl.card-legality has no Penny anchor", () => {
+test("detail page emits no candidate when dl.card-legality has no Penny anchor", () => {
   const cardName = makeEl({
     tag: "span", attrs: { class: "card-text-card-name" },
   });
@@ -217,10 +230,9 @@ test("detail page falls back to pill when dl.card-legality has no Penny anchor",
   });
 
   const candidates = collectCardCandidates(doc);
-  assert.equal(candidates.size, 1);
-  const [[host, info]] = [...candidates.entries()];
-  assert.equal(host, cardName, "must fall back to the card-name pill host");
-  assert.equal(info.placement, "inline");
+  // No Penny anchor → render nothing on the detail page (user preference:
+  // don't put words next to the card title).
+  assert.equal(candidates.size, 0);
 });
 
 test("grid view: extracts scryfallId from .card-grid-item[data-card-id], mounts on the grid item itself", () => {
@@ -245,8 +257,24 @@ test("grid view: extracts scryfallId from .card-grid-item[data-card-id], mounts 
 test("grid view ignores non-grid [data-card-id] elements (buttons, lang flags, tooltips)", () => {
   // Simulate a card detail page where Scryfall sprinkles data-card-id all
   // over the DOM. None of these should produce candidates beyond the
-  // single .card-text-card-name host from the meta tags.
+  // single dl.card-legality host emitted by Strategy A.
   const cardName = makeEl({ tag: "span", attrs: { class: "card-text-card-name" } });
+  const pennyDt = makeEl({ tag: "dt" });
+  pennyDt.textContent = "Penny";
+  const dl = makeEl({
+    tag: "dl", attrs: { class: "card-legality" },
+    children: [
+      makeEl({
+        tag: "div", attrs: { class: "card-legality-row" },
+        children: [
+          makeEl({
+            tag: "div", attrs: { class: "card-legality-item" },
+            children: [pennyDt],
+          }),
+        ],
+      }),
+    ],
+  });
   const doc = makeEl({
     children: [
       makeEl({ tag: "meta", attrs: { name: "scryfall:oracle:id", content: OID } }),
@@ -264,13 +292,15 @@ test("grid view ignores non-grid [data-card-id] elements (buttons, lang flags, t
         "data-card-id": SID2,
       }}),
       cardName,
+      dl,
     ],
   });
 
   const candidates = collectCardCandidates(doc);
-  assert.equal(candidates.size, 1, "only the meta-tag host should be selected");
-  const [[host]] = [...candidates.entries()];
-  assert.equal(host, cardName);
+  assert.equal(candidates.size, 1, "only the dl.card-legality host should be selected");
+  const [[host, info]] = [...candidates.entries()];
+  assert.equal(host, dl);
+  assert.equal(info.placement, "legality-row");
 });
 
 test("full view: scopes per .card-profile and mounts on its .card-text-card-name", () => {
