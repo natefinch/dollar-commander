@@ -235,6 +235,54 @@ test("detail page emits no candidate when dl.card-legality has no Penny anchor",
   assert.equal(candidates.size, 0);
 });
 
+test("detail page does not produce search-view pill candidates from .card-profile / .deckbuilder", () => {
+  // Real Scryfall detail pages contain .card-profile and a
+  // .deckbuilder-card-add-button[data-card-id], plus a .card-text-card-name.
+  // Those are Strategy B's pattern — they must NOT be picked up when we're
+  // on a detail page (signaled by the meta oracle:id tag), or we end up
+  // with a pill next to the card title alongside the legality row.
+  const pennyDt = makeEl({ tag: "dt" });
+  pennyDt.textContent = "Penny";
+  const dl = makeEl({
+    tag: "dl", attrs: { class: "card-legality" },
+    children: [
+      makeEl({
+        tag: "div", attrs: { class: "card-legality-row" },
+        children: [
+          makeEl({
+            tag: "div", attrs: { class: "card-legality-item" },
+            children: [pennyDt],
+          }),
+        ],
+      }),
+    ],
+  });
+  const profile = makeEl({
+    tag: "div", attrs: { class: "card-profile" },
+    children: [
+      makeEl({ tag: "button", attrs: {
+        class: "button-n vh deckbuilder-card-add-button",
+        "data-card-id": SID,
+      }}),
+      makeEl({ tag: "span", attrs: { class: "card-text-card-name" } }),
+      dl,
+    ],
+  });
+  const doc = makeEl({
+    children: [
+      makeEl({ tag: "meta", attrs: { name: "scryfall:oracle:id", content: OID } }),
+      makeEl({ tag: "meta", attrs: { name: "scryfall:card:id", content: SID } }),
+      profile,
+    ],
+  });
+
+  const candidates = collectCardCandidates(doc);
+  assert.equal(candidates.size, 1, "only the legality-row dl should be a candidate");
+  const [[host, info]] = [...candidates.entries()];
+  assert.equal(host, dl);
+  assert.equal(info.placement, "legality-row");
+});
+
 test("grid view: extracts scryfallId from .card-grid-item[data-card-id], mounts on the grid item itself", () => {
   const item1 = makeEl({
     tag: "div", attrs: { "data-card-id": SID, class: "card-grid-item" },

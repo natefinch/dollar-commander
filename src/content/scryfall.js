@@ -204,6 +204,12 @@ export function collectCardCandidates(doc) {
       });
       dl.setAttribute(ROOT_ATTR, "1");
     }
+    // Detail pages also contain `.card-profile` / `.card-text-card-name`
+    // / `.deckbuilder-card-add-button` structures that would otherwise
+    // be picked up by the search-view strategies below and render an
+    // intrusive pill next to the card title. Bail early — on a detail
+    // page the legality row is the only render target.
+    return out;
   }
 
   // -------------------------------------------------------------------------
