@@ -21,7 +21,7 @@
 // anchors, print-history links, and card-tooltip popovers, and appending a
 // badge into any of those is either invisible or wrecks the layout.
 
-import { mountBadge, removeBadgesIn } from "./common/overlay.js";
+import { mountBadge, removeBadgesIn, renderLegalityRow } from "./common/overlay.js";
 import { settingsKey } from "../lib/settings.js";
 
 const ROOT_ATTR = "data-dc-anchor";
@@ -55,13 +55,17 @@ function bootstrap() {
 
 function observeMutations() {
   const observer = new MutationObserver((mutations) => {
-    // Ignore mutations that are only badge insertions to avoid feedback loops.
+    // Ignore mutations that are only our own badge / legality-row insertions
+    // to avoid feedback loops.
     let interesting = false;
     for (const m of mutations) {
       for (const node of m.addedNodes) {
-        if (node.nodeType === 1 && !node.classList?.contains("dollar-commander-badge")) {
-          interesting = true; break;
-        }
+        if (node.nodeType !== 1) continue;
+        const cls = node.classList;
+        if (cls?.contains("dollar-commander-badge")) continue;
+        if (cls?.contains("dollar-commander-legality-row")) continue;
+        if (node.closest?.(".dollar-commander-legality-row")) continue;
+        interesting = true; break;
       }
       if (interesting) break;
     }
@@ -140,11 +144,20 @@ async function scanAndBadge() {
     }
     if (!evaluation) continue;
 
-    mountBadge(host, evaluation, {
-      thresholdUsd: response.settings?.thresholdUsd,
-      stale,
-      placement: c.placement ?? "inline",
-    });
+    mountFor(host, evaluation, c, response, stale);
+  }
+}
+
+function mountFor(host, evaluation, candidate, response, stale) {
+  const ctx = {
+    thresholdUsd: response.settings?.thresholdUsd,
+    stale,
+    placement: candidate.placement ?? "inline",
+  };
+  if (candidate.placement === "legality-row") {
+    renderLegalityRow(host, evaluation, ctx);
+  } else {
+    mountBadge(host, evaluation, ctx);
   }
 }
 
@@ -164,25 +177,40 @@ async function scanAndBadge() {
 export function collectCardCandidates(doc) {
   const out = new Map();
 
-  // -------------------------------------------------------------------------
-  // Strategy A — single-card detail page (`/card/...`). The <head> meta
-  // tags carry the canonical oracle_id, so we can skip the scryfall_id
-  // round-trip entirely.
-  // -------------------------------------------------------------------------
   const oracleMeta = doc.querySelector("meta[name='scryfall:oracle:id']");
   const cardMeta   = doc.querySelector("meta[name='scryfall:card:id']");
   const metaOracleId = oracleMeta?.getAttribute?.("content") ?? null;
   const metaCardId   = cardMeta?.getAttribute?.("content") ?? null;
+
+  // -------------------------------------------------------------------------
+  // Strategy A — single-card detail page (`/card/...`). The <head> meta
+  // tags carry the canonical oracle_id, so we can skip the scryfall_id
+  // round-trip entirely.
+  //
+  // Preferred render target on detail pages is Scryfall's native
+  // `dl.card-legality` table — we inject a new "Dollar" row right under
+  // "Penny" so it blends with the existing format-legality list. If the
+  // table or the Penny anchor is missing (older cards, schemes, vanguard,
+  // or a future localized layout), fall back to a pill badge next to the
+  // card title so the user always sees *something*.
+  // -------------------------------------------------------------------------
   if (metaOracleId && UUID_RE.test(metaOracleId)) {
-    const host = doc.querySelector(".card-text-card-name")
-              ?? doc.querySelector("h1");
-    if (host) {
-      out.set(host, {
-        oracleId: metaOracleId,
-        scryfallId: metaCardId && UUID_RE.test(metaCardId) ? metaCardId : undefined,
-        placement: "inline",
-      });
-      host.setAttribute(ROOT_ATTR, "1");
+    const dl = doc.querySelector("dl.card-legality");
+    const hasPenny = dl ? hasPennyAnchor(dl) : false;
+    const candidateInfo = {
+      oracleId: metaOracleId,
+      scryfallId: metaCardId && UUID_RE.test(metaCardId) ? metaCardId : undefined,
+    };
+    if (dl && hasPenny) {
+      out.set(dl, { ...candidateInfo, placement: "legality-row" });
+      dl.setAttribute(ROOT_ATTR, "1");
+    } else {
+      const host = doc.querySelector(".card-text-card-name")
+                ?? doc.querySelector("h1");
+      if (host) {
+        out.set(host, { ...candidateInfo, placement: "inline" });
+        host.setAttribute(ROOT_ATTR, "1");
+      }
     }
   }
 
@@ -238,6 +266,16 @@ export function collectCardCandidates(doc) {
   }
 
   return out;
+}
+
+// Returns true iff `dl` contains a `<dt>` with textContent "Penny".
+// We require this anchor before injecting our Dollar row so we never
+// blind-append on cards with non-standard / localized legality markup.
+function hasPennyAnchor(dl) {
+  for (const dt of dl.querySelectorAll("dt")) {
+    if ((dt.textContent ?? "").trim() === "Penny") return true;
+  }
+  return false;
 }
 
 // Exposed for follow-up phases; walks up from `element` looking for a UUID

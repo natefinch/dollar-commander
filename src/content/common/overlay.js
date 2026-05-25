@@ -6,6 +6,8 @@
 
 const BADGE_CLASS = "dollar-commander-badge";
 const BADGE_DATA_ATTR = "data-dc-mounted";
+const LEGALITY_ROW_CLASS = "dollar-commander-legality-row";
+const LEGALITY_ROW_ATTR = "data-dc-format-row";
 
 const STATE_STYLES = Object.freeze({
   legal_recent:     { label: "Legal",         color: "#14532d", bg: "#dcfce7", outline: "#86efac" },
@@ -14,6 +16,21 @@ const STATE_STYLES = Object.freeze({
   scheduled_illegal:{ label: "Rotating out",  color: "#7c2d12", bg: "#ffedd5", outline: "#fdba74" },
   illegal:          { label: "Illegal",       color: "#7f1d1d", bg: "#fee2e2", outline: "#fca5a5" },
   unknown:          { label: "Unknown",       color: "#475569", bg: "#f1f5f9", outline: "#cbd5e1" },
+});
+
+// Native-styled legality row mapping. We piggyback on Scryfall's own
+// `dd.legal` / `dd.not-legal` classes so the row blends with the existing
+// legality table. Six internal states collapse to two visual states; the
+// borderline (warning / scheduled_illegal) states still show "Legal" — they
+// ARE legal today — but earn a ⚠️ to flag impending change. All nuance is
+// preserved in the title tooltip.
+const LEGALITY_STATE_MAP = Object.freeze({
+  legal_recent:      { className: "legal",     text: "Legal" },
+  legal_aging:       { className: "legal",     text: "Legal" },
+  warning:           { className: "legal",     text: "Legal ⚠️" },
+  scheduled_illegal: { className: "legal",     text: "Legal ⚠️" },
+  illegal:           { className: "not-legal", text: "Not Legal" },
+  unknown:           { className: "not-legal", text: "Unknown" },
 });
 
 /**
@@ -102,6 +119,82 @@ export function mountBadge(host, evaluation, ctx = {}) {
 export function removeBadgesIn(root) {
   if (!root) return;
   for (const badge of root.querySelectorAll(`.${BADGE_CLASS}`)) badge.remove();
+  // Also remove any injected native-styled legality rows so the page is
+  // returned to its pristine state when the extension is disabled.
+  for (const row of root.querySelectorAll(`.${LEGALITY_ROW_CLASS}`)) row.remove();
+}
+
+/**
+ * Render or update a "Dollar" entry inside Scryfall's native `dl.card-legality`
+ * table. Idempotent: subsequent calls update the existing row in place.
+ *
+ * The caller MUST verify a Penny `<dt>` is present in `dl` before invoking;
+ * we use it as the insertion anchor so the new row sits directly under
+ * Penny. If absent (older/unfinished cards, localized markup) this function
+ * returns null so the caller can fall back to a pill badge.
+ *
+ * @param dl          The `<dl class="card-legality">` element.
+ * @param evaluation  legality.evaluate() output (see mountBadge docs).
+ * @param ctx         Same shape as mountBadge ctx (thresholdUsd, stale).
+ * @returns the injected `<dd>`, or null if no Penny anchor was found.
+ */
+export function renderLegalityRow(dl, evaluation, ctx = {}) {
+  if (!dl || !evaluation) return null;
+  const doc = dl.ownerDocument ?? globalThis.document;
+  if (!doc?.createElement) return null;
+
+  let row = dl.querySelector(`[${LEGALITY_ROW_ATTR}="1"]`);
+  let dd;
+  if (row) {
+    dd = row.querySelector("dd");
+  } else {
+    const pennyRow = findPennyRow(dl);
+    if (!pennyRow) return null;     // i18n / missing-format fallback
+
+    const item = doc.createElement("div");
+    item.className = "card-legality-item";
+    const dt = doc.createElement("dt");
+    dt.textContent = "Dollar";
+    dd = doc.createElement("dd");
+    item.appendChild(dt);
+    item.appendChild(dd);
+
+    row = doc.createElement("div");
+    row.className = `card-legality-row ${LEGALITY_ROW_CLASS}`;
+    row.setAttribute(LEGALITY_ROW_ATTR, "1");
+    row.appendChild(item);
+
+    // Insert directly after the Penny row. `nextSibling === null` means
+    // Penny is the last row, in which case insertBefore appends at the end.
+    dl.insertBefore(row, pennyRow.nextSibling);
+  }
+
+  const mapped = LEGALITY_STATE_MAP[evaluation.state] ?? LEGALITY_STATE_MAP.unknown;
+  // We created `dd` ourselves, so overwriting className is safe and avoids
+  // any accumulation of stale legality classes across re-renders.
+  dd.className = mapped.className;
+  dd.textContent = mapped.text + (ctx.stale ? "*" : "");
+  dd.title = buildTooltip(evaluation, ctx);
+  dd.setAttribute("aria-label", dd.title);
+  return dd;
+}
+
+function findPennyRow(dl) {
+  for (const dt of dl.querySelectorAll("dt")) {
+    const text = (dt.textContent ?? "").trim();
+    if (text === "Penny") {
+      // Walk up to the `.card-legality-row` ancestor.
+      let cursor = dt.parentElement;
+      while (cursor && cursor !== dl) {
+        const cls = cursor.className ?? "";
+        if (typeof cls === "string" && cls.split(/\s+/).includes("card-legality-row")) {
+          return cursor;
+        }
+        cursor = cursor.parentElement;
+      }
+    }
+  }
+  return null;
 }
 
 function buildTooltip(evaluation, ctx) {

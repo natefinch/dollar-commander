@@ -151,6 +151,78 @@ test("detail page: extracts oracle_id + card_id from meta tags", () => {
   assert.equal(info.placement, "inline");
 });
 
+test("detail page: prefers dl.card-legality + Penny row over pill badge", () => {
+  const cardName = makeEl({
+    tag: "span", attrs: { class: "card-text-card-name" },
+  });
+  const pennyDt = makeEl({ tag: "dt" });
+  pennyDt.textContent = "Penny";
+  const pennyItem = makeEl({
+    tag: "div", attrs: { class: "card-legality-item" },
+    children: [pennyDt],
+  });
+  const pennyRow = makeEl({
+    tag: "div", attrs: { class: "card-legality-row" },
+    children: [pennyItem],
+  });
+  const dl = makeEl({
+    tag: "dl", attrs: { class: "card-legality" },
+    children: [pennyRow],
+  });
+  const doc = makeEl({
+    children: [
+      makeEl({ tag: "meta", attrs: { name: "scryfall:oracle:id", content: OID } }),
+      makeEl({ tag: "meta", attrs: { name: "scryfall:card:id", content: SID } }),
+      cardName,
+      dl,
+    ],
+  });
+
+  const candidates = collectCardCandidates(doc);
+  assert.equal(candidates.size, 1);
+  const [[host, info]] = [...candidates.entries()];
+  assert.equal(host, dl, "host must be the dl.card-legality, not the title span");
+  assert.equal(info.oracleId, OID);
+  assert.equal(info.scryfallId, SID);
+  assert.equal(info.placement, "legality-row");
+});
+
+test("detail page falls back to pill when dl.card-legality has no Penny anchor", () => {
+  const cardName = makeEl({
+    tag: "span", attrs: { class: "card-text-card-name" },
+  });
+  // dl.card-legality exists but contains only other formats (no Penny).
+  const standardDt = makeEl({ tag: "dt" });
+  standardDt.textContent = "Standard";
+  const dl = makeEl({
+    tag: "dl", attrs: { class: "card-legality" },
+    children: [
+      makeEl({
+        tag: "div", attrs: { class: "card-legality-row" },
+        children: [
+          makeEl({
+            tag: "div", attrs: { class: "card-legality-item" },
+            children: [standardDt],
+          }),
+        ],
+      }),
+    ],
+  });
+  const doc = makeEl({
+    children: [
+      makeEl({ tag: "meta", attrs: { name: "scryfall:oracle:id", content: OID } }),
+      cardName,
+      dl,
+    ],
+  });
+
+  const candidates = collectCardCandidates(doc);
+  assert.equal(candidates.size, 1);
+  const [[host, info]] = [...candidates.entries()];
+  assert.equal(host, cardName, "must fall back to the card-name pill host");
+  assert.equal(info.placement, "inline");
+});
+
 test("grid view: extracts scryfallId from .card-grid-item[data-card-id], mounts on the grid item itself", () => {
   const item1 = makeEl({
     tag: "div", attrs: { "data-card-id": SID, class: "card-grid-item" },
