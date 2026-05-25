@@ -31,6 +31,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 let mutationTimer = null;
 let lastBatchKey = "";
+let loadingRetryTimer = null;
+const LOADING_RETRY_MS = 5000;
 
 // Auto-bootstrap when running in a browser content-script context. The guard
 // lets us import this module from Node-based unit tests without side effects.
@@ -47,6 +49,15 @@ function bootstrap() {
     if (area !== "local") return;
     lastBatchKey = "";              // force re-render after settings change
     scheduleScan();
+  });
+  // Background SW broadcasts this when its first successful fetch lands;
+  // re-scan so any "Downloading…" placeholders pick up real legality data.
+  chrome.runtime?.onMessage?.addListener?.((msg) => {
+    if (msg?.type === "dollar-commander:data-ready") {
+      clearLoadingRetry();
+      lastBatchKey = "";
+      scheduleScan();
+    }
   });
   scheduleScan();
   observeMutations();
@@ -89,6 +100,26 @@ function scheduleScan() {
   }, MUTATION_DEBOUNCE_MS);
 }
 
+// Safety net for when the SW's `dollar-commander:data-ready` broadcast
+// doesn't reach us (cold-loaded tab, SW killed before broadcast, etc.).
+// Forces a re-scan every LOADING_RETRY_MS until a lookup actually succeeds,
+// at which point `clearLoadingRetry()` stops the loop.
+function scheduleLoadingRetry() {
+  if (loadingRetryTimer) return;
+  loadingRetryTimer = setTimeout(() => {
+    loadingRetryTimer = null;
+    lastBatchKey = "";
+    scheduleScan();
+  }, LOADING_RETRY_MS);
+}
+
+function clearLoadingRetry() {
+  if (loadingRetryTimer) {
+    clearTimeout(loadingRetryTimer);
+    loadingRetryTimer = null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Scan + badge
 // ---------------------------------------------------------------------------
@@ -121,7 +152,29 @@ async function scanAndBadge() {
     oracleIds: [...oracleIds],
     scryfallIds: [...scryfallIds],
   });
-  if (!response?.ok) return;
+  if (!response?.ok) {
+    if (response?.error === "loading") {
+      // SW is still pulling the initial ~21 MB index. Render a "Downloading…"
+      // placeholder per candidate so the user sees that something is
+      // happening rather than a silent empty row.
+      //
+      // Recovery: we *expect* the SW to broadcast `dollar-commander:data-ready`
+      // once the fetch lands, and that handler resets lastBatchKey + reschedules
+      // the scan. As a safety net for missed broadcasts (cold-loaded tabs,
+      // SW killed mid-fetch, etc.), we also kick a periodic retry that
+      // forces another lookup until we get real data. Keep lastBatchKey
+      // set to its current value so unrelated DOM churn doesn't trigger
+      // a flood of duplicate "loading" lookups.
+      const loadingCtx = { thresholdUsd: undefined, stale: false };
+      for (const [host, c] of candidates) {
+        mountFor(host, { state: "loading" }, c, { settings: loadingCtx }, false);
+      }
+      scheduleLoadingRetry();
+    }
+    return;
+  }
+
+  clearLoadingRetry();
 
   const stale = !!response.dataStale;
   const oraclesByScryfall = new Map(

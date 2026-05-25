@@ -32,6 +32,7 @@ let cached = null; // { manifest, priceIndex, cardIndex, parsedAt }
 let inFlight = null;
 
 let storageWarmAttempted = false;
+let storageWarmInFlight = null;
 
 /**
  * Return the parsed price-index + card-index. Single-flight: concurrent
@@ -159,25 +160,35 @@ async function persistToStorage(payload) {
 }
 
 async function tryWarmFromStorage() {
+  if (cached) return cached;
+  if (storageWarmInFlight) return storageWarmInFlight;
   if (storageWarmAttempted) return cached;
-  storageWarmAttempted = true;
   if (typeof chrome === "undefined" || !chrome.storage?.local) return null;
-  const stored = await chrome.storage.local.get(STORAGE_KEY);
-  const entry = stored[STORAGE_KEY];
-  if (!entry?.manifest || !entry?.priceIndex || !entry?.cardIndex) return null;
-  // Re-validate the persisted manifest in case the schema changed under us.
-  try {
-    validateManifest(entry.manifest);
-  } catch {
-    return null;
-  }
-  cached = {
-    manifest: entry.manifest,
-    priceIndex: entry.priceIndex,
-    cardIndex: entry.cardIndex,
-    parsedAt: 0,                 // force a refresh on next non-force call
-  };
-  return cached;
+
+  storageWarmInFlight = (async () => {
+    try {
+      const stored = await chrome.storage.local.get(STORAGE_KEY);
+      const entry = stored[STORAGE_KEY];
+      if (!entry?.manifest || !entry?.priceIndex || !entry?.cardIndex) return null;
+      // Re-validate the persisted manifest in case the schema changed under us.
+      try {
+        validateManifest(entry.manifest);
+      } catch {
+        return null;
+      }
+      cached = {
+        manifest: entry.manifest,
+        priceIndex: entry.priceIndex,
+        cardIndex: entry.cardIndex,
+        parsedAt: 0,                 // force a refresh on next non-force call
+      };
+      return cached;
+    } finally {
+      storageWarmAttempted = true;
+      storageWarmInFlight = null;
+    }
+  })();
+  return storageWarmInFlight;
 }
 
 /** Eagerly populate the in-memory cache from persisted storage if possible. */
@@ -204,6 +215,24 @@ export function dataAsOf() {
   return cached?.manifest?.as_of_date ?? null;
 }
 
+/** True iff an in-memory price/card index is available right now. */
+export function hasIndex() {
+  return cached !== null;
+}
+
+/** True iff a manifest+asset download is currently in progress. */
+export function isFetching() {
+  return inFlight !== null;
+}
+
+/** Synchronous accessor: return the in-memory cached index or null. Unlike
+ *  `getIndex()`, this never triggers a network fetch and never awaits — it
+ *  reflects the current cache state as-is. Use this when you must serve a
+ *  lookup *now* and a stale-but-non-empty result is acceptable. */
+export function getCachedIndex() {
+  return cached;
+}
+
 /** Force a fresh fetch on next getIndex(). */
 export function invalidateCache() {
   cached = null;
@@ -214,7 +243,7 @@ export function invalidateCache() {
 export const _internal = {
   get cached() { return cached; },
   set cached(v) { cached = v; },
-  reset() { cached = null; inFlight = null; storageWarmAttempted = false; },
+  reset() { cached = null; inFlight = null; storageWarmAttempted = false; storageWarmInFlight = null; },
   MANIFEST_URL,
   ASSET_BASE,
   MAX_ASSET_BYTES,

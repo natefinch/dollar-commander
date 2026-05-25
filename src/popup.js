@@ -124,8 +124,13 @@ async function refreshStatusFromBackground() {
   );
   const asOf = response?.dataAsOf ?? null;
   if (!asOf) {
-    els.statusAsof.textContent = "not yet loaded";
-    els.statusAge.textContent = "waiting for first fetch";
+    if (response?.loading) {
+      els.statusAsof.textContent = "downloading…";
+      els.statusAge.textContent = "fetching ~21 MB of price data (one-time)";
+    } else {
+      els.statusAsof.textContent = "not yet loaded";
+      els.statusAge.textContent = "waiting for first fetch";
+    }
     els.staleBanner.hidden = true;
     return;
   }

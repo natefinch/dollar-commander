@@ -16,6 +16,7 @@ const STATE_STYLES = Object.freeze({
   scheduled_illegal:{ label: "Rotating out",  color: "#7c2d12", bg: "#ffedd5", outline: "#fdba74" },
   illegal:          { label: "Illegal",       color: "#7f1d1d", bg: "#fee2e2", outline: "#fca5a5" },
   unknown:          { label: "Unknown",       color: "#475569", bg: "#f1f5f9", outline: "#cbd5e1" },
+  loading:          { label: "Downloading…",  color: "#475569", bg: "#f1f5f9", outline: "#cbd5e1" },
 });
 
 // Native-styled legality row mapping. We piggyback on Scryfall's own
@@ -31,6 +32,7 @@ const LEGALITY_STATE_MAP = Object.freeze({
   scheduled_illegal: { className: "legal",     text: "Legal ⚠️" },
   illegal:           { className: "not-legal", text: "Not Legal" },
   unknown:           { className: "not-legal", text: "Unknown" },
+  loading:           { className: "not-legal", text: "Downloading…" },
 });
 
 /**
@@ -198,6 +200,9 @@ function findPennyRow(dl) {
 }
 
 function buildTooltip(evaluation, ctx) {
+  if (evaluation.state === "loading") {
+    return "Dollar Commander: downloading price data… this should take a few seconds on a fresh install.";
+  }
   const lines = [`Dollar Commander: ${labelFor(evaluation.state)}`];
   if (ctx.thresholdUsd !== undefined) {
     lines.push(`Threshold: $${Number(ctx.thresholdUsd).toFixed(2)}`);

@@ -243,6 +243,7 @@ test("renderLegalityRow maps states to native classes/labels", () => {
       { state: "scheduled_illegal", expectClass: "legal",     expectText: "Legal ⚠️" },
       { state: "illegal",           expectClass: "not-legal", expectText: "Not Legal" },
       { state: "unknown",           expectClass: "not-legal", expectText: "Unknown" },
+      { state: "loading",           expectClass: "not-legal", expectText: "Downloading…" },
     ];
     for (const { state, expectClass, expectText } of cases) {
       const dl = makeLegalityDl(doc);

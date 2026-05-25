@@ -80,3 +80,24 @@ test("sha256Hex matches the well-known hash for 'abc'", async () => {
     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
   );
 });
+
+import { hasIndex, isFetching, _internal } from "../src/lib/price-index.js";
+
+test("hasIndex/isFetching reflect the in-memory cache state", () => {
+  _internal.reset();
+  assert.equal(hasIndex(), false);
+  assert.equal(isFetching(), false);
+
+  // Simulate a successful fetch landing in the cache.
+  _internal.cached = {
+    manifest: { as_of_date: "2026-05-24", schema_version: { major: 1, minor: 0 } },
+    priceIndex: { cards: {} },
+    cardIndex:  { scryfall_id_to_oracle: {} },
+    parsedAt: Date.now(),
+  };
+  assert.equal(hasIndex(), true);
+  assert.equal(isFetching(), false);
+
+  _internal.reset();
+  assert.equal(hasIndex(), false);
+});
