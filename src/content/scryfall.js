@@ -1,30 +1,21 @@
-// Scryfall content script — extracts oracle_ids from scryfall.com pages and
-// mounts Dollar Commander badges next to card titles.
+// Scryfall content script — injects a Dollar Commander row into the
+// legality table on Scryfall card detail pages.
 //
-// Lives in the extension's ISOLATED world. Scryfall conveniently exposes
-// stable identifiers in the DOM across four page modes:
+// Lives in the extension's ISOLATED world. Card detail pages
+// (`/card/{set}/{cn}/{slug}`) ship `<meta name="scryfall:oracle:id">` +
+// `<meta name="scryfall:card:id">` in <head>, and render Scryfall's
+// native `<dl class="card-legality">` table on the page. We inject a
+// "$ Commander" row directly under the existing "Penny" row so it
+// blends with the surrounding format-legality list.
 //
-//   * Card detail pages (`/card/{set}/{cn}/{slug}`) ship
-//     `<meta name="scryfall:oracle:id">` + `<meta name="scryfall:card:id">`
-//     in <head>, with the title rendered as `<span class="card-text-card-name">`.
-//   * Full search view (`/search?as=full`) stacks multiple `.card-profile`
-//     blocks — each holds a `button.deckbuilder-card-add-button[data-card-id]`
-//     plus its own `.card-text-card-name`.
-//   * Grid search view (`/search?as=grid`, the default) renders
-//     `.card-grid-item[data-card-id]` wrappers around card images.
-//   * Checklist search view (`/search?as=checklist`) renders
-//     `table.checklist > tbody > tr[data-card-id]` rows; the name lives
-//     in a `<td class="ellipsis"><a>...</a></td>` cell.
-//
-// We must NOT blindly select every `[data-card-id]` on the page — Scryfall
-// scatters that attribute across visually-hidden buttons, language-flag
-// anchors, print-history links, and card-tooltip popovers, and appending a
-// badge into any of those is either invisible or wrecks the layout.
+// We deliberately do NOT render anything on search-result pages (grid,
+// full, checklist views): the pill badges were too intrusive next to
+// card titles and didn't carry their weight relative to the price info
+// Scryfall already shows.
 
-import { mountBadge, removeBadgesIn, renderLegalityRow } from "./common/overlay.js";
+import { removeOverlayIn, renderLegalityRow } from "./common/overlay.js";
 import { settingsKey } from "../lib/settings.js";
 
-const ROOT_ATTR = "data-dc-anchor";
 const RUNTIME_MSG = "dollar-commander:lookup";
 const MUTATION_DEBOUNCE_MS = 250;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -66,25 +57,22 @@ function bootstrap() {
 
 function observeMutations() {
   const observer = new MutationObserver((mutations) => {
-    // Ignore mutations that are only our own badge / legality-row insertions
-    // to avoid feedback loops.
+    // Ignore mutations that are only our own legality-row insertions to
+    // avoid feedback loops.
     let interesting = false;
     for (const m of mutations) {
       for (const node of m.addedNodes) {
         if (node.nodeType !== 1) continue;
-        const cls = node.classList;
-        if (cls?.contains("dollar-commander-badge")) continue;
-        if (cls?.contains("dollar-commander-legality-row")) continue;
+        if (node.classList?.contains("dollar-commander-legality-row")) continue;
         if (node.closest?.(".dollar-commander-legality-row")) continue;
         interesting = true; break;
       }
       if (interesting) break;
     }
     if (interesting) {
-      // The page DOM changed under us — if Scryfall replaced the same card
-      // tiles (e.g., Vue rerender of a search grid that happens to contain
-      // the same set of UUIDs), the new host elements have no badges yet
-      // even though our batch key is unchanged. Force a re-mount.
+      // The page DOM changed under us — Scryfall's SPA navigations swap
+      // the legality table when moving between cards, and our previously
+      // injected row is gone. Force a re-render.
       lastBatchKey = "";
       scheduleScan();
     }
@@ -121,13 +109,13 @@ function clearLoadingRetry() {
 }
 
 // ---------------------------------------------------------------------------
-// Scan + badge
+// Scan + render
 // ---------------------------------------------------------------------------
 
 async function scanAndBadge() {
   const enabled = await isEnabled();
   if (!enabled) {
-    removeBadgesIn(document.body);
+    removeOverlayIn(document.body);
     return;
   }
 
@@ -135,22 +123,19 @@ async function scanAndBadge() {
   if (candidates.size === 0) return;
 
   const oracleIds = new Set();
-  const scryfallIds = new Set();
   for (const c of candidates.values()) {
     if (c.oracleId) oracleIds.add(c.oracleId);
-    if (c.scryfallId) scryfallIds.add(c.scryfallId);
   }
 
   // Skip the round-trip if the candidate batch is identical to the previous
-  // scan; the badges already reflect the current state.
-  const batchKey = [...oracleIds].sort().join("|") + "::" + [...scryfallIds].sort().join("|");
+  // scan; the legality row already reflects the current state.
+  const batchKey = [...oracleIds].sort().join("|");
   if (batchKey === lastBatchKey) return;
   lastBatchKey = batchKey;
 
   const response = await sendMessage({
     type: RUNTIME_MSG,
     oracleIds: [...oracleIds],
-    scryfallIds: [...scryfallIds],
   });
   if (!response?.ok) {
     if (response?.error === "loading") {
@@ -166,8 +151,8 @@ async function scanAndBadge() {
       // set to its current value so unrelated DOM churn doesn't trigger
       // a flood of duplicate "loading" lookups.
       const loadingCtx = { thresholdUsd: undefined, stale: false };
-      for (const [host, c] of candidates) {
-        mountFor(host, { state: "loading" }, c, { settings: loadingCtx }, false);
+      for (const [host] of candidates) {
+        renderLegalityRow(host, { state: "loading" }, loadingCtx);
       }
       scheduleLoadingRetry();
     }
@@ -177,40 +162,14 @@ async function scanAndBadge() {
   clearLoadingRetry();
 
   const stale = !!response.dataStale;
-  const oraclesByScryfall = new Map(
-    response.scryfall.map((r) => [r.scryfallId, r]),
-  );
-
   for (const [host, c] of candidates) {
-    let evaluation = null;
-    if (c.oracleId && response.oracles[c.oracleId]) {
-      evaluation = response.oracles[c.oracleId];
-    } else if (c.scryfallId && oraclesByScryfall.has(c.scryfallId)) {
-      const r = oraclesByScryfall.get(c.scryfallId);
-      evaluation = {
-        state: r.state,
-        record: r.record,
-        lastUnder: r.lastUnder,
-        daysUntilRotation: r.daysUntilRotation,
-        nextRotation: r.nextRotation,
-      };
-    }
+    const evaluation = response.oracles?.[c.oracleId];
     if (!evaluation) continue;
 
-    mountFor(host, evaluation, c, response, stale);
-  }
-}
-
-function mountFor(host, evaluation, candidate, response, stale) {
-  const ctx = {
-    thresholdUsd: response.settings?.thresholdUsd,
-    stale,
-    placement: candidate.placement ?? "inline",
-  };
-  if (candidate.placement === "legality-row") {
-    renderLegalityRow(host, evaluation, ctx);
-  } else {
-    mountBadge(host, evaluation, ctx);
+    renderLegalityRow(host, evaluation, {
+      thresholdUsd: response.settings?.thresholdUsd,
+      stale,
+    });
   }
 }
 
@@ -219,103 +178,37 @@ function mountFor(host, evaluation, candidate, response, stale) {
 // ---------------------------------------------------------------------------
 
 /**
- * Walk the DOM and return a Map of `host element` -> candidate descriptor.
- * Each descriptor may carry `oracleId`, `scryfallId`, and a `placement` hint
- * (`"inline"` for badges that flow next to text, `"absolute"` for corner
- * overlays on card-image tiles).
+ * Walk the DOM and return a Map of `host element` -> candidate descriptor
+ * for every card we want to annotate. Each descriptor carries an `oracleId`
+ * that handleLookup resolves through the price index.
  *
- * Exported for tests so a synthetic DOM can exercise the extraction
- * heuristics without going through the full background-SW round-trip.
+ * The detail page is the ONLY render target — search-result pages (grid,
+ * full, checklist) are deliberately ignored. The detail page exposes the
+ * canonical oracle_id via `<meta name="scryfall:oracle:id">` in <head>,
+ * and we render exclusively inside the native `dl.card-legality` table.
+ *
+ * Exported for tests so a synthetic DOM can exercise the extraction logic
+ * without going through the full background-SW round-trip.
  */
 export function collectCardCandidates(doc) {
   const out = new Map();
 
   const oracleMeta = doc.querySelector("meta[name='scryfall:oracle:id']");
-  const cardMeta   = doc.querySelector("meta[name='scryfall:card:id']");
   const metaOracleId = oracleMeta?.getAttribute?.("content") ?? null;
-  const metaCardId   = cardMeta?.getAttribute?.("content") ?? null;
 
-  // -------------------------------------------------------------------------
-  // Strategy A — single-card detail page (`/card/...`). The <head> meta
-  // tags carry the canonical oracle_id, so we can skip the scryfall_id
-  // round-trip entirely.
-  //
-  // We render exclusively inside Scryfall's native `dl.card-legality`
-  // table, injecting a new "$ Commander" row right under "Penny" so it
-  // blends with the existing format-legality list. If the table or the
-  // Penny anchor is missing (schemes, vanguard, tokens, or a future
-  // localized layout) we render nothing on this page rather than slap a
-  // pill next to the card title — explicit user preference.
-  // -------------------------------------------------------------------------
-  if (metaOracleId && UUID_RE.test(metaOracleId)) {
-    const dl = doc.querySelector("dl.card-legality");
-    if (dl && hasPennyAnchor(dl)) {
-      out.set(dl, {
-        oracleId: metaOracleId,
-        scryfallId: metaCardId && UUID_RE.test(metaCardId) ? metaCardId : undefined,
-        placement: "legality-row",
-      });
-      dl.setAttribute(ROOT_ATTR, "1");
-    }
-    // Detail pages also contain `.card-profile` / `.card-text-card-name`
-    // / `.deckbuilder-card-add-button` structures that would otherwise
-    // be picked up by the search-view strategies below and render an
-    // intrusive pill next to the card title. Bail early — on a detail
-    // page the legality row is the only render target.
-    return out;
+  // Single-card detail page (`/card/...`). If no oracle meta, this isn't
+  // a detail page and we render nothing.
+  if (!metaOracleId || !UUID_RE.test(metaOracleId)) return out;
+
+  // Anchor on Scryfall's native `dl.card-legality`, inserting our row
+  // directly under "Penny". If the table or the Penny anchor is missing
+  // (schemes, vanguard, tokens, or a future localized layout) we render
+  // nothing on this page rather than slap a pill next to the card title
+  // — explicit user preference.
+  const dl = doc.querySelector("dl.card-legality");
+  if (dl && hasPennyAnchor(dl)) {
+    out.set(dl, { oracleId: metaOracleId });
   }
-
-  // -------------------------------------------------------------------------
-  // Strategy B — full search view (`?as=full`) renders multiple
-  // `.card-profile` blocks. Within each profile, the visually-hidden
-  // deckbuilder-add button carries the printing's scryfall_id, and the
-  // visible `.card-text-card-name` is our badge host.
-  // -------------------------------------------------------------------------
-  for (const profile of doc.querySelectorAll(".card-profile")) {
-    const btn = profile.querySelector(".deckbuilder-card-add-button[data-card-id]");
-    const sid = btn?.getAttribute?.("data-card-id");
-    if (!sid || !UUID_RE.test(sid)) continue;
-    const host = profile.querySelector(".card-text-card-name");
-    if (!host || out.has(host)) continue;
-    out.set(host, { scryfallId: sid, placement: "inline" });
-    host.setAttribute(ROOT_ATTR, "1");
-  }
-
-  // -------------------------------------------------------------------------
-  // Strategy C — grid search view (`?as=grid`, the default).
-  // `.card-grid-item[data-card-id]` is the wrapper around each card image.
-  // We mount on the wrapper (NOT the inner image-link `<a>`) because
-  // appending a child inside the image-link gets clipped by Scryfall's
-  // layout. The badge floats absolutely in the top-right corner of the
-  // card tile.
-  // -------------------------------------------------------------------------
-  for (const item of doc.querySelectorAll(".card-grid-item[data-card-id]")) {
-    const sid = item.getAttribute("data-card-id");
-    if (!sid || !UUID_RE.test(sid)) continue;
-    if (out.has(item)) continue;
-    out.set(item, { scryfallId: sid, placement: "absolute" });
-    item.setAttribute(ROOT_ATTR, "1");
-  }
-
-  // -------------------------------------------------------------------------
-  // Strategy D — checklist search view (`?as=checklist`). Rows under
-  // `table.checklist` carry `data-card-id`. Mount in the USD-price `<td>`
-  // (the cell containing `a.currency-usd`) — that cell is non-`.ellipsis`,
-  // so the badge isn't clipped, and it's the column the user is already
-  // scanning for affordability info. Falls back to a sane row anchor.
-  // -------------------------------------------------------------------------
-  for (const row of doc.querySelectorAll("table.checklist tr[data-card-id]")) {
-    const sid = row.getAttribute("data-card-id");
-    if (!sid || !UUID_RE.test(sid)) continue;
-    const usdLink = row.querySelector("a.currency-usd");
-    const host = usdLink?.parentElement
-              ?? row.querySelector(".ellipsis a")
-              ?? row.querySelector("a");
-    if (!host || out.has(host)) continue;
-    out.set(host, { scryfallId: sid, placement: "inline" });
-    host.setAttribute(ROOT_ATTR, "1");
-  }
-
   return out;
 }
 
@@ -327,20 +220,6 @@ function hasPennyAnchor(dl) {
     if ((dt.textContent ?? "").trim() === "Penny") return true;
   }
   return false;
-}
-
-// Exposed for follow-up phases; walks up from `element` looking for a UUID
-// attribute Scryfall may render on a nearby ancestor.
-export function findScryfallIdNear(element) {
-  let cursor = element;
-  for (let i = 0; cursor && i < 6; i++) {
-    const attr =
-      cursor.getAttribute?.("data-card-id") ??
-      cursor.getAttribute?.("data-scryfall-id");
-    if (typeof attr === "string" && UUID_RE.test(attr)) return attr;
-    cursor = cursor.parentElement;
-  }
-  return null;
 }
 
 // ---------------------------------------------------------------------------

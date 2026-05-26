@@ -29,7 +29,6 @@
     {
       "matches": ["https://scryfall.com/*"],
       "js": ["content/scryfall.js"],
-      "css": ["styles.css"],
       "run_at": "document_idle"
     }
   ],

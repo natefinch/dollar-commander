@@ -16,7 +16,7 @@ const BUNDLE_ENTRIES = [
 ];
 
 // Files copied as-is (no bundling).
-const COPY_FILES = ['popup.html', 'styles.css'];
+const COPY_FILES = ['popup.html'];
 
 function mergeManifests(browser) {
   const base = JSON.parse(readFileSync(join(ROOT, 'manifests', 'base.json'), 'utf-8'));

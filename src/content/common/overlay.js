@@ -1,23 +1,12 @@
-// Shared overlay rendering for Dollar Commander badges across sites.
+// Shared overlay rendering for Dollar Commander on Scryfall.
 //
-// `mountBadge(host, evaluation)` attaches a pill-shaped badge to the given
-// host element. All visible text comes from `textContent` (never
-// `innerHTML`) so data from the published index can never inject markup.
+// Only one render target: a "$ Commander" row injected into Scryfall's
+// native `dl.card-legality` table on card detail pages. All visible text
+// comes from `textContent` (never `innerHTML`) so data from the published
+// index can never inject markup.
 
-const BADGE_CLASS = "dollar-commander-badge";
-const BADGE_DATA_ATTR = "data-dc-mounted";
 const LEGALITY_ROW_CLASS = "dollar-commander-legality-row";
 const LEGALITY_ROW_ATTR = "data-dc-format-row";
-
-const STATE_STYLES = Object.freeze({
-  legal_recent:     { label: "Legal",         color: "#14532d", bg: "#dcfce7", outline: "#86efac" },
-  legal_aging:      { label: "Legal (aging)", color: "#1e3a8a", bg: "#dbeafe", outline: "#93c5fd" },
-  warning:          { label: "Warning",       color: "#78350f", bg: "#fef3c7", outline: "#fcd34d" },
-  scheduled_illegal:{ label: "Rotating out",  color: "#7c2d12", bg: "#ffedd5", outline: "#fdba74" },
-  illegal:          { label: "Illegal",       color: "#7f1d1d", bg: "#fee2e2", outline: "#fca5a5" },
-  unknown:          { label: "Unknown",       color: "#475569", bg: "#f1f5f9", outline: "#cbd5e1" },
-  loading:          { label: "Downloading…",  color: "#475569", bg: "#f1f5f9", outline: "#cbd5e1" },
-});
 
 // Native-styled legality row mapping. We piggyback on Scryfall's own
 // `dd.legal` / `dd.not-legal` classes so the row blends with the existing
@@ -35,109 +24,34 @@ const LEGALITY_STATE_MAP = Object.freeze({
   loading:           { className: "not-legal", text: "Downloading…" },
 });
 
-/**
- * Render or update a Dollar Commander badge on `host`.
- *
- * @param host  DOM element to anchor the badge to. The badge is appended
- *              once; subsequent calls update the existing badge in place.
- * @param evaluation  output of legality.evaluate(): { state, record?, lastUnder?, daysUntilRotation?, nextRotation? }.
- * @param ctx
- *   ctx.thresholdUsd     the threshold used for evaluation (for tooltip).
- *   ctx.stale (bool)     whether the data feed is stale (banner-style hint).
- *   ctx.placement        "inline" (default) flows next to text; "absolute"
- *                        floats the badge into the host's top-right corner.
- *                        Use "absolute" for image-tile hosts (card grids).
- */
-export function mountBadge(host, evaluation, ctx = {}) {
-  if (!host || !evaluation) return null;
-  let badge = host.querySelector(`.${BADGE_CLASS}`);
-  if (!badge) {
-    badge = document.createElement("span");
-    badge.className = BADGE_CLASS;
-    badge.setAttribute(BADGE_DATA_ATTR, "1");
-    host.appendChild(badge);
-  }
-
-  const style = STATE_STYLES[evaluation.state] ?? STATE_STYLES.unknown;
-  const placement = ctx.placement === "absolute" ? "absolute" : "inline";
-
-  const baseStyles = {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "4px",
-    padding: "2px 8px",
-    borderRadius: "999px",
-    border: `1px solid ${style.outline}`,
-    background: style.bg,
-    color: style.color,
-    font: "600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    lineHeight: "1.3",
-    cursor: "default",
-  };
-
-  if (placement === "absolute") {
-    // Only promote host to positioned context if it is currently static —
-    // we must not clobber Scryfall's own positioned layouts.
-    try {
-      const view = host.ownerDocument?.defaultView ?? globalThis;
-      const computed = view?.getComputedStyle?.(host);
-      if (computed && computed.position === "static") {
-        host.style.position = "relative";
-      }
-    } catch { /* getComputedStyle unavailable in tests; ignore */ }
-
-    Object.assign(badge.style, baseStyles, {
-      position: "absolute",
-      top: "6px",
-      right: "6px",
-      // Modest z-index — wins over the card image inside the tile, but
-      // stays below page-wide Scryfall modals / image-zoom popovers.
-      zIndex: "10",
-      // Keep pointer-events: auto so the browser surfaces the native
-      // `title` tooltip on hover. The small badge in the corner blocks
-      // ~50px of click area on the card image link; the user can still
-      // click the rest of the tile to navigate to the card detail page.
-      pointerEvents: "auto",
-      boxShadow: "0 1px 2px rgba(0,0,0,0.15)",
-    });
-  } else {
-    Object.assign(badge.style, baseStyles, {
-      position: "static",
-      marginLeft: "6px",
-      verticalAlign: "middle",
-      zIndex: "auto",
-      pointerEvents: "auto",
-    });
-  }
-
-  // textContent only — never assign innerHTML with data-driven strings.
-  badge.textContent = style.label + (ctx.stale ? " (stale)" : "");
-  badge.title = buildTooltip(evaluation, ctx);
-  badge.setAttribute("aria-label", badge.title);
-
-  return badge;
-}
-
-export function removeBadgesIn(root) {
-  if (!root) return;
-  for (const badge of root.querySelectorAll(`.${BADGE_CLASS}`)) badge.remove();
-  // Also remove any injected native-styled legality rows so the page is
-  // returned to its pristine state when the extension is disabled.
-  for (const row of root.querySelectorAll(`.${LEGALITY_ROW_CLASS}`)) row.remove();
-}
+// Friendly state labels for the tooltip. Independent from the visual
+// class/text mapping above so we can describe nuance in the hover text
+// without leaking it into the row label.
+const TOOLTIP_STATE_LABELS = Object.freeze({
+  legal_recent:      "Legal",
+  legal_aging:       "Legal (aging)",
+  warning:           "Warning",
+  scheduled_illegal: "Rotating out",
+  illegal:           "Illegal",
+  unknown:           "Unknown",
+  loading:           "Downloading…",
+});
 
 /**
- * Render or update a "Dollar" entry inside Scryfall's native `dl.card-legality`
- * table. Idempotent: subsequent calls update the existing row in place.
+ * Render or update a "$ Commander" entry inside Scryfall's native
+ * `dl.card-legality` table. Idempotent: subsequent calls update the
+ * existing row in place.
  *
  * The caller MUST verify a Penny `<dt>` is present in `dl` before invoking;
  * we use it as the insertion anchor so the new row sits directly under
  * Penny. If absent (older/unfinished cards, localized markup) this function
- * returns null so the caller can fall back to a pill badge.
+ * returns null and renders nothing.
  *
  * @param dl          The `<dl class="card-legality">` element.
- * @param evaluation  legality.evaluate() output (see mountBadge docs).
- * @param ctx         Same shape as mountBadge ctx (thresholdUsd, stale).
+ * @param evaluation  legality.evaluate() output: { state, record?, lastUnder?, daysUntilRotation?, nextRotation? }.
+ * @param ctx
+ *   ctx.thresholdUsd  the threshold used for evaluation (for tooltip).
+ *   ctx.stale (bool)  whether the data feed is stale (banner-style hint).
  * @returns the injected `<dd>`, or null if no Penny anchor was found.
  */
 export function renderLegalityRow(dl, evaluation, ctx = {}) {
@@ -179,6 +93,16 @@ export function renderLegalityRow(dl, evaluation, ctx = {}) {
   dd.title = buildTooltip(evaluation, ctx);
   dd.setAttribute("aria-label", dd.title);
   return dd;
+}
+
+/**
+ * Remove every injected Dollar Commander legality row from `root`. Used
+ * when the extension is disabled on this site so the page returns to its
+ * pristine state.
+ */
+export function removeOverlayIn(root) {
+  if (!root) return;
+  for (const row of root.querySelectorAll(`.${LEGALITY_ROW_CLASS}`)) row.remove();
 }
 
 function findPennyRow(dl) {
@@ -229,5 +153,5 @@ function buildTooltip(evaluation, ctx) {
 }
 
 function labelFor(state) {
-  return STATE_STYLES[state]?.label ?? "Unknown";
+  return TOOLTIP_STATE_LABELS[state] ?? "Unknown";
 }

@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { collectCardCandidates, findScryfallIdNear } from "../src/content/scryfall.js";
+import { collectCardCandidates } from "../src/content/scryfall.js";
 
 function makeEl({ tag = "div", attrs = {}, children = [], parent = null } = {}) {
   const el = {
@@ -160,8 +160,6 @@ test("detail page: extracts oracle_id + card_id from meta tags into a legality-r
   const [[host, info]] = [...candidates.entries()];
   assert.equal(host, dl);
   assert.equal(info.oracleId, OID);
-  assert.equal(info.scryfallId, SID);
-  assert.equal(info.placement, "legality-row");
 });
 
 test("detail page: prefers dl.card-legality + Penny row over pill badge", () => {
@@ -196,8 +194,6 @@ test("detail page: prefers dl.card-legality + Penny row over pill badge", () => 
   const [[host, info]] = [...candidates.entries()];
   assert.equal(host, dl, "host must be the dl.card-legality, not the title span");
   assert.equal(info.oracleId, OID);
-  assert.equal(info.scryfallId, SID);
-  assert.equal(info.placement, "legality-row");
 });
 
 test("detail page emits no candidate when dl.card-legality has no Penny anchor", () => {
@@ -233,241 +229,4 @@ test("detail page emits no candidate when dl.card-legality has no Penny anchor",
   // No Penny anchor → render nothing on the detail page (user preference:
   // don't put words next to the card title).
   assert.equal(candidates.size, 0);
-});
-
-test("detail page does not produce search-view pill candidates from .card-profile / .deckbuilder", () => {
-  // Real Scryfall detail pages contain .card-profile and a
-  // .deckbuilder-card-add-button[data-card-id], plus a .card-text-card-name.
-  // Those are Strategy B's pattern — they must NOT be picked up when we're
-  // on a detail page (signaled by the meta oracle:id tag), or we end up
-  // with a pill next to the card title alongside the legality row.
-  const pennyDt = makeEl({ tag: "dt" });
-  pennyDt.textContent = "Penny";
-  const dl = makeEl({
-    tag: "dl", attrs: { class: "card-legality" },
-    children: [
-      makeEl({
-        tag: "div", attrs: { class: "card-legality-row" },
-        children: [
-          makeEl({
-            tag: "div", attrs: { class: "card-legality-item" },
-            children: [pennyDt],
-          }),
-        ],
-      }),
-    ],
-  });
-  const profile = makeEl({
-    tag: "div", attrs: { class: "card-profile" },
-    children: [
-      makeEl({ tag: "button", attrs: {
-        class: "button-n vh deckbuilder-card-add-button",
-        "data-card-id": SID,
-      }}),
-      makeEl({ tag: "span", attrs: { class: "card-text-card-name" } }),
-      dl,
-    ],
-  });
-  const doc = makeEl({
-    children: [
-      makeEl({ tag: "meta", attrs: { name: "scryfall:oracle:id", content: OID } }),
-      makeEl({ tag: "meta", attrs: { name: "scryfall:card:id", content: SID } }),
-      profile,
-    ],
-  });
-
-  const candidates = collectCardCandidates(doc);
-  assert.equal(candidates.size, 1, "only the legality-row dl should be a candidate");
-  const [[host, info]] = [...candidates.entries()];
-  assert.equal(host, dl);
-  assert.equal(info.placement, "legality-row");
-});
-
-test("grid view: extracts scryfallId from .card-grid-item[data-card-id], mounts on the grid item itself", () => {
-  const item1 = makeEl({
-    tag: "div", attrs: { "data-card-id": SID, class: "card-grid-item" },
-    children: [makeEl({ tag: "a", attrs: { class: "card-grid-item-card", href: "/card/x" } })],
-  });
-  const item2 = makeEl({
-    tag: "div", attrs: { "data-card-id": "not-a-uuid", class: "card-grid-item" },
-    children: [makeEl({ tag: "a", attrs: { href: "/card/y" } })],
-  });
-  const doc = makeEl({ children: [item1, item2] });
-
-  const candidates = collectCardCandidates(doc);
-  assert.equal(candidates.size, 1);
-  const [[host, info]] = [...candidates.entries()];
-  assert.equal(host, item1, "host must be the .card-grid-item wrapper, not the inner anchor");
-  assert.equal(info.scryfallId, SID);
-  assert.equal(info.placement, "absolute");
-});
-
-test("grid view ignores non-grid [data-card-id] elements (buttons, lang flags, tooltips)", () => {
-  // Simulate a card detail page where Scryfall sprinkles data-card-id all
-  // over the DOM. None of these should produce candidates beyond the
-  // single dl.card-legality host emitted by Strategy A.
-  const cardName = makeEl({ tag: "span", attrs: { class: "card-text-card-name" } });
-  const pennyDt = makeEl({ tag: "dt" });
-  pennyDt.textContent = "Penny";
-  const dl = makeEl({
-    tag: "dl", attrs: { class: "card-legality" },
-    children: [
-      makeEl({
-        tag: "div", attrs: { class: "card-legality-row" },
-        children: [
-          makeEl({
-            tag: "div", attrs: { class: "card-legality-item" },
-            children: [pennyDt],
-          }),
-        ],
-      }),
-    ],
-  });
-  const doc = makeEl({
-    children: [
-      makeEl({ tag: "meta", attrs: { name: "scryfall:oracle:id", content: OID } }),
-      makeEl({ tag: "meta", attrs: { name: "scryfall:card:id", content: SID } }),
-      makeEl({ tag: "button", attrs: {
-        class: "button-n vh deckbuilder-card-add-button",
-        "data-card-id": SID,
-      }}),
-      makeEl({ tag: "a", attrs: {
-        class: "print-langs-item current",
-        "data-card-id": SID2,
-      }}),
-      makeEl({ tag: "a", attrs: {
-        "data-component": "card-tooltip",
-        "data-card-id": SID2,
-      }}),
-      cardName,
-      dl,
-    ],
-  });
-
-  const candidates = collectCardCandidates(doc);
-  assert.equal(candidates.size, 1, "only the dl.card-legality host should be selected");
-  const [[host, info]] = [...candidates.entries()];
-  assert.equal(host, dl);
-  assert.equal(info.placement, "legality-row");
-});
-
-test("full view: scopes per .card-profile and mounts on its .card-text-card-name", () => {
-  const profile1Name = makeEl({ tag: "span", attrs: { class: "card-text-card-name" } });
-  const profile1 = makeEl({
-    tag: "div", attrs: { class: "card-profile" },
-    children: [
-      makeEl({ tag: "button", attrs: {
-        class: "button-n vh deckbuilder-card-add-button",
-        "data-card-id": SID,
-      }}),
-      profile1Name,
-      // Decoy: print-langs sibling with a different data-card-id must not
-      // become a candidate.
-      makeEl({ tag: "a", attrs: {
-        class: "print-langs-item",
-        "data-card-id": SID2,
-      }}),
-    ],
-  });
-  const profile2Name = makeEl({ tag: "span", attrs: { class: "card-text-card-name" } });
-  const profile2 = makeEl({
-    tag: "div", attrs: { class: "card-profile" },
-    children: [
-      makeEl({ tag: "button", attrs: {
-        class: "button-n vh deckbuilder-card-add-button",
-        "data-card-id": SID2,
-      }}),
-      profile2Name,
-    ],
-  });
-  const doc = makeEl({ children: [profile1, profile2] });
-
-  const candidates = collectCardCandidates(doc);
-  assert.equal(candidates.size, 2);
-  const entries = [...candidates.entries()];
-  assert.equal(entries[0][0], profile1Name);
-  assert.equal(entries[0][1].scryfallId, SID);
-  assert.equal(entries[0][1].placement, "inline");
-  assert.equal(entries[1][0], profile2Name);
-  assert.equal(entries[1][1].scryfallId, SID2);
-});
-
-test("checklist view: mounts on the USD-price cell (non-ellipsis), not the clipped name anchor", () => {
-  const nameAnchor = makeEl({ tag: "a", attrs: { href: "/card/x" } });
-  const nameCell = makeEl({
-    tag: "td", attrs: { class: "ellipsis" }, children: [nameAnchor],
-  });
-  const usdAnchor = makeEl({
-    tag: "a", attrs: { class: "currency-usd", title: "Nonfoil: $12.72" },
-  });
-  const usdCell = makeEl({
-    tag: "td", attrs: { class: "right" }, children: [usdAnchor],
-  });
-  const row = makeEl({
-    tag: "tr", attrs: {
-      "data-component": "card-tooltip",
-      "data-card-id": SID,
-    },
-    children: [
-      makeEl({ tag: "td", children: [makeEl({ tag: "a", attrs: { href: "/card/x" } })] }),
-      nameCell,
-      usdCell,
-    ],
-  });
-  const tbody = makeEl({ tag: "tbody", children: [row] });
-  const table = makeEl({
-    tag: "table", attrs: { class: "checklist" }, children: [tbody],
-  });
-  const doc = makeEl({ children: [table] });
-
-  const candidates = collectCardCandidates(doc);
-  assert.equal(candidates.size, 1);
-  const [[host, info]] = [...candidates.entries()];
-  assert.equal(host, usdCell, "host must be the USD-price <td>, not the ellipsis-clipped name anchor");
-  assert.equal(info.scryfallId, SID);
-  assert.equal(info.placement, "inline");
-});
-
-test("checklist view falls back to name anchor when USD cell missing", () => {
-  const nameAnchor = makeEl({ tag: "a", attrs: { href: "/card/x" } });
-  const nameCell = makeEl({
-    tag: "td", attrs: { class: "ellipsis" }, children: [nameAnchor],
-  });
-  const row = makeEl({
-    tag: "tr", attrs: {
-      "data-component": "card-tooltip",
-      "data-card-id": SID,
-    },
-    children: [nameCell],
-  });
-  const tbody = makeEl({ tag: "tbody", children: [row] });
-  const table = makeEl({
-    tag: "table", attrs: { class: "checklist" }, children: [tbody],
-  });
-  const doc = makeEl({ children: [table] });
-
-  const candidates = collectCardCandidates(doc);
-  assert.equal(candidates.size, 1);
-  const [[host]] = [...candidates.entries()];
-  assert.equal(host, nameAnchor);
-});
-
-test("findScryfallIdNear walks ancestors looking for a UUID attribute", () => {
-  const inner = makeEl({ tag: "span" });
-  const mid = makeEl({ tag: "div", children: [inner] });
-  const top = makeEl({
-    tag: "section", attrs: { "data-card-id": SID }, children: [mid],
-  });
-  inner.parentElement = mid;
-  mid.parentElement = top;
-  assert.equal(findScryfallIdNear(inner), SID);
-});
-
-test("findScryfallIdNear rejects non-UUID attribute values", () => {
-  const inner = makeEl({ tag: "span" });
-  const top = makeEl({
-    tag: "section", attrs: { "data-card-id": "not-a-uuid" }, children: [inner],
-  });
-  inner.parentElement = top;
-  assert.equal(findScryfallIdNear(inner), null);
 });
