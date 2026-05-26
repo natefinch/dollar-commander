@@ -230,3 +230,139 @@ test("detail page emits no candidate when dl.card-legality has no Penny anchor",
   // don't put words next to the card title).
   assert.equal(candidates.size, 0);
 });
+
+// ---------------------------------------------------------------------------
+// Full-view search results: each `.card-profile` is its own render target.
+// ---------------------------------------------------------------------------
+
+function makeProfileWithLegality({ sid, includePenny = true } = {}) {
+  const button = makeEl({
+    tag: "button",
+    attrs: { class: "button-n vh deckbuilder-card-add-button", "data-card-id": sid },
+  });
+  const rows = [];
+  if (includePenny) {
+    const pennyDt = makeEl({ tag: "dt" });
+    pennyDt.textContent = "Penny";
+    rows.push(makeEl({
+      tag: "div", attrs: { class: "card-legality-row" },
+      children: [makeEl({
+        tag: "div", attrs: { class: "card-legality-item" },
+        children: [pennyDt],
+      })],
+    }));
+  } else {
+    const standardDt = makeEl({ tag: "dt" });
+    standardDt.textContent = "Standard";
+    rows.push(makeEl({
+      tag: "div", attrs: { class: "card-legality-row" },
+      children: [makeEl({
+        tag: "div", attrs: { class: "card-legality-item" },
+        children: [standardDt],
+      })],
+    }));
+  }
+  const dl = makeEl({
+    tag: "dl", attrs: { class: "card-legality" }, children: rows,
+  });
+  const profile = makeEl({
+    tag: "div", attrs: { class: "card-profile" },
+    children: [button, dl],
+  });
+  return { profile, dl, button };
+}
+
+test("full view: emits one candidate per .card-profile, keyed on its dl with the profile's data-card-id", () => {
+  const { profile: p1, dl: dl1 } = makeProfileWithLegality({ sid: SID });
+  const { profile: p2, dl: dl2 } = makeProfileWithLegality({ sid: SID2 });
+  const doc = makeEl({ children: [p1, p2] });
+
+  const candidates = collectCardCandidates(doc);
+  assert.equal(candidates.size, 2);
+  const map = new Map([...candidates.entries()]);
+  assert.equal(map.get(dl1).scryfallId, SID);
+  assert.equal(map.get(dl2).scryfallId, SID2);
+  // Full-view candidates don't carry oracleId — the SW resolves it from
+  // the scryfallId against its loaded card index.
+  assert.equal(map.get(dl1).oracleId, undefined);
+});
+
+test("full view: skips profiles whose dl.card-legality has no Penny anchor", () => {
+  const { profile: ok, dl: okDl } = makeProfileWithLegality({ sid: SID });
+  const { profile: noPenny } = makeProfileWithLegality({ sid: SID2, includePenny: false });
+  const doc = makeEl({ children: [ok, noPenny] });
+
+  const candidates = collectCardCandidates(doc);
+  assert.equal(candidates.size, 1);
+  const [[host, info]] = [...candidates.entries()];
+  assert.equal(host, okDl);
+  assert.equal(info.scryfallId, SID);
+});
+
+test("full view: skips profiles whose data-card-id is missing or malformed", () => {
+  const { profile: ok, dl: okDl } = makeProfileWithLegality({ sid: SID });
+  const { profile: badSid } = makeProfileWithLegality({ sid: "not-a-uuid" });
+  const doc = makeEl({ children: [ok, badSid] });
+
+  const candidates = collectCardCandidates(doc);
+  assert.equal(candidates.size, 1);
+  assert.equal([...candidates.values()][0].scryfallId, SID);
+  assert.equal([...candidates.keys()][0], okDl);
+});
+
+test("full view: ignores decoy [data-card-id] descendants, prefers the deckbuilder button", () => {
+  // Real Scryfall profiles can include other elements with data-card-id
+  // (e.g., related-card tooltips). We must extract the printing id from
+  // the deckbuilder-card-add-button specifically, not the first one we
+  // see in tree order.
+  const button = makeEl({
+    tag: "button",
+    attrs: { class: "button-n vh deckbuilder-card-add-button", "data-card-id": SID },
+  });
+  const decoy = makeEl({
+    tag: "a",
+    attrs: { class: "related-card-link", "data-card-id": SID2 },
+  });
+  const pennyDt = makeEl({ tag: "dt" });
+  pennyDt.textContent = "Penny";
+  const dl = makeEl({
+    tag: "dl", attrs: { class: "card-legality" },
+    children: [makeEl({
+      tag: "div", attrs: { class: "card-legality-row" },
+      children: [makeEl({
+        tag: "div", attrs: { class: "card-legality-item" },
+        children: [pennyDt],
+      })],
+    })],
+  });
+  // Decoy ordered FIRST in tree order — querySelector("[data-card-id]")
+  // would return the decoy, but the scoped selector must skip it.
+  const profile = makeEl({
+    tag: "div", attrs: { class: "card-profile" },
+    children: [decoy, button, dl],
+  });
+  const doc = makeEl({ children: [profile] });
+
+  const candidates = collectCardCandidates(doc);
+  assert.equal(candidates.size, 1);
+  assert.equal([...candidates.values()][0].scryfallId, SID);
+});
+
+test("detail page beats full view: meta-tag fast path returns one detail candidate even if .card-profile is present", () => {
+  // Real Scryfall detail pages render the card inside a .card-profile too.
+  // We must still use the meta-tag oracleId rather than walking profiles.
+  const { profile, dl } = makeProfileWithLegality({ sid: SID });
+  const doc = makeEl({
+    children: [
+      makeEl({ tag: "meta", attrs: { name: "scryfall:oracle:id", content: OID } }),
+      profile,
+    ],
+  });
+
+  const candidates = collectCardCandidates(doc);
+  assert.equal(candidates.size, 1);
+  const [[host, info]] = [...candidates.entries()];
+  assert.equal(host, dl);
+  assert.equal(info.oracleId, OID);
+  assert.equal(info.scryfallId, undefined);
+});

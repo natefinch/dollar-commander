@@ -1,9 +1,10 @@
 // Shared overlay rendering for Dollar Commander on Scryfall.
 //
-// Only one render target: a "$ Commander" row injected into Scryfall's
-// native `dl.card-legality` table on card detail pages. All visible text
-// comes from `textContent` (never `innerHTML`) so data from the published
-// index can never inject markup.
+// Renders a "$ Commander" row into Scryfall's native `dl.card-legality`
+// tables — both the single table on detail pages and the per-card tables
+// in full-view search results. All visible text comes from `textContent`
+// (never `innerHTML`) so data from the published index can never inject
+// markup.
 
 const LEGALITY_ROW_CLASS = "dollar-commander-legality-row";
 const LEGALITY_ROW_ATTR = "data-dc-format-row";
